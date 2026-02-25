@@ -3,4 +3,4 @@ typing
 langchain-core
 streamlit
 langgraph
-opanai
+openai
