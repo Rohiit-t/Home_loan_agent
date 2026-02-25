@@ -1,0 +1,6 @@
+langchain
+typing
+langchain-core
+streamlit
+langgraph
+opanai
