@@ -3,4 +3,6 @@ typing
 langchain-core
 streamlit
 langgraph
-openai
+langchain-openai
+pydantic
+python-dotenv

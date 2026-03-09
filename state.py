@@ -19,6 +19,7 @@ class ApplicationState(TypedDict):
 
     uploaded_documents: Dict[str, DocumentMeta]
     all_documents_uploaded: bool
+    current_processing_doc: Optional[str]  # Added for document processing subgraph
 
     personal_info: dict
     financial_info: dict
