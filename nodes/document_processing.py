@@ -41,6 +41,7 @@ class DocumentProcessingNodes:
     def data_extraction_node(self, state: ApplicationState) -> ApplicationState:
         """
         Third node: Extract data from corresponding mock JSON and store to state.
+        Safely accumulates data across multiple invocations.
         """
         doc_type = state.get("current_processing_doc")
         
@@ -58,6 +59,8 @@ class DocumentProcessingNodes:
         uploaded_docs = state.get("uploaded_documents", {})
         if not uploaded_docs:
             uploaded_docs = {}
+        
+        uploaded_docs = dict(uploaded_docs)
             
         uploaded_docs[doc_type] = {
             "uploaded": True,
@@ -73,20 +76,14 @@ class DocumentProcessingNodes:
 
         # Extract specific details to the main state
         if doc_type == "aadhaar":
-            personal_info = state.get("personal_info", {})
-            if not personal_info:
-                personal_info = {}
+            personal_info = dict(state.get("personal_info", {}) or {})
             personal_info["name"] = mock_data.get("name")
             updates["personal_info"] = personal_info
         elif doc_type == "pan":
-            personal_info = state.get("personal_info", {})
-            if not personal_info:
-                personal_info = {}
+            personal_info = dict(state.get("personal_info", {}) or {})
             updates["personal_info"] = personal_info
         elif doc_type == "itr":
-            financial_info = state.get("financial_info", {})
-            if not financial_info:
-                financial_info = {}
+            financial_info = dict(state.get("financial_info", {}) or {})
             financial_info["net_monthly_income"] = mock_data.get("net_monthly_income")
             updates["financial_info"] = financial_info
 
