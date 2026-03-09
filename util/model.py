@@ -1,6 +1,9 @@
 from langchain_openai import ChatOpenAI
 import os
 from typing import TypedDict, Annotated, Literal, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def get_api_key()->str:
