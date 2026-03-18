@@ -5,9 +5,9 @@ from langgraph.graph import StateGraph, START, END
 
 from app.backend.graph.state import ApplicationState
 
-# Mock data is at app/mock_data, we're at app/backend/nodes
-# Go up 2 levels to reach app/, then into mock_data
-MOCK_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "mock_data")
+# Mock data lives at repo-root mock_data/
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+MOCK_DATA_DIR = os.path.join(PROJECT_ROOT, "mock_data")
 
 
 class DocumentProcessingNodes:
