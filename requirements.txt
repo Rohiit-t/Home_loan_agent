@@ -1,8 +1,0 @@
-langchain
-typing
-langchain-core
-streamlit
-langgraph
-langchain-openai
-pydantic
-python-dotenv

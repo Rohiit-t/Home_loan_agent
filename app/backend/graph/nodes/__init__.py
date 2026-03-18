@@ -5,7 +5,7 @@ This package provides a unified class-based agent structure for all node operati
 following LangGraph industry standards.
 """
 
-from nodes.agent import HomeLoanAgent
-from nodes.document_processing import build_document_processing_subgraph
+from .agent import HomeLoanAgent
+from .document_processing import build_document_processing_subgraph
 
 __all__ = ["HomeLoanAgent", "build_document_processing_subgraph"]

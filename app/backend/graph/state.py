@@ -19,13 +19,20 @@ class ApplicationState(TypedDict):
 
     uploaded_documents: Dict[str, DocumentMeta]
     all_documents_uploaded: bool
-    current_processing_doc: Optional[str]  # Added for document processing subgraph
+    missing_documents: List[str]
+    current_processing_doc: Optional[str]
 
     personal_info: dict
     financial_info: dict
     employment_info: dict
+    
+    all_loan_details_provided: bool
+    missing_loan_details: List[str]
 
     financial_metrics: Dict
+    emi_details: Dict
 
     paused_reason: Optional[str]
+    application_saved: bool
+    email_sent: bool
     retry_count: int

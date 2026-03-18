@@ -3,9 +3,11 @@ import os
 from langchain_core.messages import AIMessage
 from langgraph.graph import StateGraph, START, END
 
-from state import ApplicationState
+from app.backend.graph.state import ApplicationState
 
-MOCK_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mock_data")
+# Mock data is at app/mock_data, we're at app/backend/nodes
+# Go up 2 levels to reach app/, then into mock_data
+MOCK_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "mock_data")
 
 
 class DocumentProcessingNodes:
