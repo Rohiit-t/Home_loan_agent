@@ -10,8 +10,11 @@ WebSocket-based real-time API that handles:
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any
+from typing import Any, Dict, Iterable, Tuple
+from langgraph.types import Command
+from starlette.websockets import WebSocketState
 import asyncio
+import hashlib
 import json
 import uuid
 from datetime import datetime
@@ -20,312 +23,239 @@ import logging
 
 from app.backend.graph import build_graph
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Home Loan Application API",
-    description="WebSocket API for processing home loan applications using LangGraph workflow",
-    version="2.0.0"
-)
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-memory session store
-sessions: Dict[str, Dict[str, Any]] = {}
+graph = build_graph()
 
-graph = None
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize graph on startup."""
-    global graph
-    logger.info("Building LangGraph workflow...")
-    graph = build_graph()
-    logger.info("Graph built successfully!")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger("home-loan-ws")
 
 
-# ==================== Helpers ====================
+def _unpack_updates(data: Any) -> Iterable[Tuple[str, Any]]:
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, (tuple, list)) and len(item) == 2 and item[0] != "__interrupt__":
+                yield item[0], item[1]
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            if key != "__interrupt__":
+                yield key, value
 
 
-def get_session_config(session_id: str, thread_id: str) -> Dict[str, Any]:
-    """Get config for LangGraph execution."""
-    return {
-        "configurable": {
-            "thread_id": thread_id
-        }
-    }
+def _is_human_message(message: Any) -> bool:
+    if isinstance(message, HumanMessage):
+        return True
+    message_type = getattr(message, "type", "")
+    return str(message_type).lower() == "human"
 
 
-async def handle_create_session(websocket: WebSocket, data: dict):
+def _extract_bot_messages(diff: Dict[str, Any], node_name: str) -> list[Dict[str, str]]:
+    """Extract bot (non-human) messages from a node diff.
+
+    Always generates a *deterministic* ID from the node name + content hash
+    so the frontend can reliably deduplicate.  LangChain message IDs are
+    random UUIDs and must NOT be forwarded as-is.
     """
-    Handle session creation over WebSocket.
-    Expects: {"action": "create_session", "user_id": "...", "user_email": "..."}
-    """
-    try:
-        session_id = str(uuid.uuid4())
-        user_id = data.get("user_id") or f"user_{uuid.uuid4().hex[:8]}"
-        thread_id = f"thread_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    output: list[Dict[str, str]] = []
+    messages = diff.get("messages", [])
 
-        session_data = {
-            "session_id": session_id,
-            "thread_id": thread_id,
+    if not isinstance(messages, list):
+        return output
+
+    for message in messages:
+        if _is_human_message(message):
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            text = content.strip()
+            digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+            msg_id = f"{node_name}:{digest}"
+            output.append({"id": msg_id, "text": text})
+
+    return output
+
+
+def _normalize_event_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = str(payload.get("user_id") or "").strip() or f"USR-{uuid.uuid4()}"
+    payload_type = str(payload.get("type") or "").strip().lower()
+
+    if payload_type == "file_upload":
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("file_upload payload requires 'data' as JSON object")
+        return {
             "user_id": user_id,
-            "user_email": data.get("user_email"),
-            "created_at": datetime.now().isoformat(),
-            "last_activity": datetime.now().isoformat()
-        }
-        sessions[session_id] = session_data
-
-        # Initialize graph state
-        config = get_session_config(session_id, thread_id)
-        initial_state = {
-            "user_id": user_id,
-            "messages": []
+            "user_query": None,
+            "uploaded_docs": data,
+            "intent": None,
         }
 
-        user_email = data.get("user_email")
-        if user_email:
-            initial_state["personal_info"] = {"email": user_email}
-
-        graph.update_state(config, initial_state, as_node="__start__")
-
-        logger.info(f"Created session {session_id} for user {user_id}")
-
-        await websocket.send_json({
-            "type": "session_created",
-            "session_id": session_id,
-            "thread_id": thread_id,
+    if payload_type == "text":
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            raise ValueError("text payload requires non-empty 'message'")
+        return {
             "user_id": user_id,
-            "created_at": session_data["created_at"],
-            "message": "Session created successfully"
-        })
+            "user_query": message,
+            "uploaded_docs": None,
+            "intent": None,
+            "messages": [HumanMessage(content=message)],
+        }
 
-    except Exception as e:
-        logger.error(f"Error creating session: {str(e)}", exc_info=True)
-        await websocket.send_json({
-            "type": "error",
-            "content": f"Failed to create session: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        })
+    raise ValueError("payload type must be either 'text' or 'file_upload'")
 
 
-async def handle_send_message(websocket: WebSocket, data: dict):
-    """
-    Handle user message and stream graph execution over WebSocket.
-    Expects: {"action": "send_message", "session_id": "...", "message": "..."}
+async def run_graph(ws: WebSocket, graph_input: Any, thread_id: str) -> str:
+    logger.info("[thread=%s] graph execution started", thread_id)
+    config = {"configurable": {"thread_id": thread_id}}
 
-    Sends real-time chunks:
-      {"type": "yield",    "content": "..."}   — progress/node execution messages
-      {"type": "message",  "content": "..."}   — AI response messages
-      {"type": "state",    "field": "...", "value": ...}  — state changes
-      {"type": "complete", "data": {...}}       — graph run finished
-      {"type": "error",    "content": "..."}   — error occurred
-    """
-    session_id = data.get("session_id")
-    user_message = data.get("message", "")
+    # Per-turn dedup: track message IDs already sent in THIS streaming turn
+    # so the same bot message is never forwarded twice.
+    sent_msg_ids: set[str] = set()
 
-    try:
-        session = sessions.get(session_id)
-        if not session:
-            await websocket.send_json({
-                "type": "error",
-                "content": "Session not found",
-                "timestamp": datetime.now().isoformat()
+    async for chunk in graph.astream(
+        graph_input,
+        config=config,
+        stream_mode=["updates", "custom"],
+        version="v2",
+    ):
+        kind = chunk.get("type")
+
+        if kind == "custom":
+            await ws.send_json({
+                "event": "custom",
+                "data": chunk.get("data", {}),
             })
-            return
 
-        session["last_activity"] = datetime.now().isoformat()
+        elif kind == "updates":
+            for node_name, diff in _unpack_updates(chunk.get("data", {})):
+                if not isinstance(diff, dict):
+                    continue
 
-        thread_id = session["thread_id"]
-        config = get_session_config(session_id, thread_id)
+                bot_messages = _extract_bot_messages(diff, node_name)
 
-        # Get current state to track new messages
-        snapshot = graph.get_state(config)
+                # Filter out messages already sent in this turn
+                new_messages = []
+                for item in bot_messages:
+                    if item["id"] not in sent_msg_ids:
+                        sent_msg_ids.add(item["id"])
+                        new_messages.append(item)
 
-        input_state = {"messages": [HumanMessage(content=user_message)]}
+                if not new_messages:
+                    continue
 
-        seen_messages = set()
-        prev_msg_count = len(snapshot.values.get("messages", [])) if snapshot.values else 0
-
-        logger.info(f"Starting stream for session {session_id}")
-
-        # Run synchronous graph.stream in a thread and collect all chunks
-        all_chunks = await asyncio.to_thread(
-            lambda: list(graph.stream(input_state, config, stream_mode="values"))
-        )
-
-        for state in all_chunks:
-            # Check for new messages (including yield messages)
-            if "messages" in state:
-                messages = state["messages"]
-                if len(messages) > prev_msg_count:
-                    for msg in messages[prev_msg_count:]:
-                        if isinstance(msg, AIMessage):
-                            content = msg.content
-                            msg_hash = hash(content)
-
-                            if msg_hash not in seen_messages:
-                                seen_messages.add(msg_hash)
-
-                                # Determine message type
-                                is_yield = any(indicator in content for indicator in [
-                                    "Analyzing", "Extracting", "Processing",
-                                    "Checking", "Calculating", "Saving",
-                                    "Preparing", "Sending", "Finding information"
-                                ]) and len(content) < 150
-
-                                chunk_type = "yield" if is_yield else "message"
-
-                                await websocket.send_json({
-                                    "type": chunk_type,
-                                    "content": content,
-                                    "timestamp": datetime.now().isoformat()
-                                })
-
-                    prev_msg_count = len(messages)
-
-            # Send state updates for key changes
-            if "intent" in state and state["intent"]:
-                await websocket.send_json({
-                    "type": "state",
-                    "field": "intent",
-                    "value": state["intent"]
+                await ws.send_json({
+                    "event": "updates",
+                    "data": {
+                        "node": node_name,
+                        "keys": list(diff.keys()),
+                        "messages": [item["text"] for item in new_messages],
+                        "bot_messages": new_messages,
+                    },
                 })
 
-            if "all_documents_uploaded" in state and state.get("all_documents_uploaded"):
-                await websocket.send_json({
-                    "type": "state",
-                    "field": "all_documents_uploaded",
-                    "value": True
-                })
+    snapshot = graph.get_state(config)
 
-            if "all_loan_details_provided" in state and state.get("all_loan_details_provided"):
-                await websocket.send_json({
-                    "type": "state",
-                    "field": "all_loan_details_provided",
-                    "value": True
-                })
+    if snapshot.next and snapshot.tasks:
+        interrupts = snapshot.tasks[0].interrupts
+        if interrupts:
+            payload = interrupts[0].value
+            await ws.send_json({
+                "event": "interrupt",
+                "data": payload,
+            })
+            logger.info("[thread=%s] interrupt emitted", thread_id)
+            return "interrupt"
 
-            if "application_saved" in state and state.get("application_saved"):
-                await websocket.send_json({
-                    "type": "state",
-                    "field": "application_saved",
-                    "value": True
-                })
-
-        # Get final state
-        final_snapshot = await asyncio.to_thread(lambda: graph.get_state(config))
-
-        await websocket.send_json({
-            "type": "complete",
-            "data": {
-                "current_stage": final_snapshot.values.get("current_stage") if final_snapshot.values else None,
-                "is_paused": bool(final_snapshot.next),
-                "next_nodes": list(final_snapshot.next) if final_snapshot.next else [],
-                "paused_reason": final_snapshot.values.get("paused_reason") if final_snapshot.values else None,
-                "documents_uploaded": len(final_snapshot.values.get("uploaded_documents", {})) if final_snapshot.values else 0,
-                "all_documents_uploaded": final_snapshot.values.get("all_documents_uploaded", False) if final_snapshot.values else False,
-                "all_loan_details_provided": final_snapshot.values.get("all_loan_details_provided", False) if final_snapshot.values else False,
-                "application_saved": final_snapshot.values.get("application_saved", False) if final_snapshot.values else False
-            }
-        })
-
-        logger.info(f"Stream completed for session {session_id}")
-
-    except Exception as e:
-        logger.error(f"Error in handle_send_message: {str(e)}", exc_info=True)
-        await websocket.send_json({
-            "type": "error",
-            "content": str(e),
-            "timestamp": datetime.now().isoformat()
-        })
+    final_values = snapshot.values or {}
+    await ws.send_json({
+        "event": "done",
+        "data": {
+            "user_id": final_values.get("user_id"),
+            "current_stage": final_values.get("current_stage"),
+            "all_documents_uploaded": final_values.get("all_documents_uploaded"),
+            "all_loan_details_provided": final_values.get("all_loan_details_provided"),
+            "email_sent": final_values.get("email_sent"),
+        },
+    })
+    logger.info("[thread=%s] graph execution completed", thread_id)
+    return "done"
 
 
-# ==================== Endpoints ====================
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint (HTTP — used by Streamlit before opening WebSocket)."""
-    return {
-        "status": "healthy",
-        "graph_status": "loaded" if graph else "not_loaded",
-        "active_sessions": len(sessions)
-    }
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """
-    Single WebSocket endpoint for all client-server communication.
-
-    Client sends JSON messages with an "action" field:
-      - {"action": "create_session", "user_id": "...", "user_email": "..."}
-      - {"action": "send_message", "session_id": "...", "message": "..."}
-
-    Server responds with JSON messages with a "type" field:
-      - {"type": "session_created", ...}
-      - {"type": "yield", "content": "..."}
-      - {"type": "message", "content": "..."}
-      - {"type": "state", "field": "...", "value": ...}
-      - {"type": "complete", "data": {...}}
-      - {"type": "error", "content": "..."}
-    """
-    await websocket.accept()
-    logger.info("WebSocket connection established")
+@app.websocket("/chat")
+async def chat(ws: WebSocket) -> None:
+    connection_id = str(uuid.uuid4())[:8]
+    await ws.accept()
+    client = f"{ws.client.host}:{ws.client.port}" if ws.client else "unknown"
+    logger.info("[conn=%s] websocket connected from %s", connection_id, client)
 
     try:
         while True:
-            # Wait for client message
-            raw = await websocket.receive_text()
+            raw = await ws.receive_text()
+            msg = json.loads(raw)
 
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "Invalid JSON",
-                    "timestamp": datetime.now().isoformat()
-                })
-                continue
+            thread_id = str(msg.get("thread_id") or "loan-1")
+            message_type = "resume" if "resume" in msg else "message"
+            logger.info("[conn=%s][thread=%s] received %s payload", connection_id, thread_id, message_type)
 
-            action = data.get("action")
-
-            if action == "create_session":
-                await handle_create_session(websocket, data)
-
-            elif action == "send_message":
-                await handle_send_message(websocket, data)
-
+            if "resume" in msg:
+                resume_payload = msg["resume"]
+                user_id = str(msg.get("user_id") or "").strip() or f"USR-{uuid.uuid4()}"
+                if isinstance(resume_payload, dict):
+                    resume_payload = {**resume_payload, "user_id": user_id}
+                    normalized_resume = _normalize_event_payload(resume_payload)
+                else:
+                    text = str(resume_payload or "").strip()
+                    normalized_resume = {
+                        "user_id": user_id,
+                        "user_query": text,
+                        "uploaded_docs": None,
+                        "intent": None,
+                        "messages": [HumanMessage(content=text)] if text else [],
+                    }
+                result = await run_graph(ws, Command(resume=normalized_resume), thread_id)
             else:
-                await websocket.send_json({
-                    "type": "error",
-                    "content": f"Unknown action: {action}",
-                    "timestamp": datetime.now().isoformat()
-                })
+                normalized = _normalize_event_payload(msg)
+                result = await run_graph(ws, normalized, thread_id)
 
-    except WebSocketDisconnect:
-        logger.info("WebSocket connection closed")
-    except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}", exc_info=True)
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "content": str(e),
-                "timestamp": datetime.now().isoformat()
+            await ws.send_json({"event": "end", "data": {"result": result}})
+            logger.info("[conn=%s][thread=%s] stream ended with result=%s", connection_id, thread_id, result)
+
+    except ValueError as exc:
+        logger.warning("[conn=%s] invalid payload: %s", connection_id, exc)
+        if ws.application_state == WebSocketState.CONNECTED:
+            await ws.send_json({
+                "event": "error",
+                "data": {"message": str(exc)},
             })
-        except Exception:
-            pass
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    except WebSocketDisconnect:
+        logger.info("[conn=%s] websocket disconnected by client", connection_id)
+    except Exception as exc:
+        logger.exception("[conn=%s] websocket handler error", connection_id)
+        if ws.application_state == WebSocketState.CONNECTED:
+            await ws.send_json({
+                "event": "error",
+                "data": {"message": str(exc)},
+            })
+    finally:
+        if (
+            ws.client_state == WebSocketState.CONNECTED
+            and ws.application_state == WebSocketState.CONNECTED
+        ):
+            try:
+                await ws.close()
+            except RuntimeError:
+                pass
+        logger.info("[conn=%s] websocket closed", connection_id)

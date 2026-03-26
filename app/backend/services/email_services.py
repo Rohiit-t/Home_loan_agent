@@ -18,7 +18,6 @@ def send_application_summary_email(
     user_id: str,
     personal_info: Dict[str, Any],
     financial_info: Dict[str, Any],
-    employment_info: Dict[str, Any],
     financial_metrics: Dict[str, Any],
     emi_details: Dict[str, Any]
 ) -> Tuple[str, bool]:
@@ -31,7 +30,6 @@ def send_application_summary_email(
         user_id: Application/User ID
         personal_info: Personal information dictionary
         financial_info: Financial information dictionary
-        employment_info: Employment information dictionary
         financial_metrics: Financial risk metrics dictionary
         emi_details: EMI calculation details dictionary
         
@@ -54,8 +52,6 @@ def send_application_summary_email(
     foir = financial_metrics.get("foir_ratio", 0)
     cibil = financial_metrics.get("cibil_score", 0)
     interest_rate = emi_details.get("annual_interest_rate", 0)
-    employer = employment_info.get("employer_name", "N/A")
-    emp_type = employment_info.get("employment_type", "N/A")
     
     # Build HTML email body
     html_body = f"""
@@ -76,10 +72,6 @@ def send_application_summary_email(
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">{user_id}</td></tr>
                 <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Applicant Name</strong></td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee;">{applicant_name}</td></tr>
-                <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Employer</strong></td>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee;">{employer}</td></tr>
-                <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Employment Type</strong></td>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee;">{emp_type}</td></tr>
             </table>
             
             <h3 style="color: #1a73e8; border-bottom: 2px solid #1a73e8; padding-bottom: 5px;">💰 Loan & EMI Details</h3>

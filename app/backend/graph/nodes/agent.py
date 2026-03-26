@@ -133,6 +133,14 @@ class HomeLoanAgent:
 
         last_content = getattr(messages[-1], "content", "") if messages else ""
         return str(last_content) if last_content else ""
+
+    def _resolve_user_query(self, state: ApplicationState) -> str:
+        direct_query = state.get("user_query")
+        if isinstance(direct_query, str) and direct_query.strip():
+            return direct_query.strip()
+
+        messages = state.get("messages", [])
+        return self._latest_user_query(messages)
     
     
     def intent_classifier(self, state: ApplicationState) -> Dict[str, Any]:
@@ -147,13 +155,20 @@ class HomeLoanAgent:
     
         """
         writer = get_stream_writer()
+        uploaded_docs = state.get("uploaded_docs")
+
+        if isinstance(uploaded_docs, dict):
+            writer({"type": "status", "node": "intent_classifier", "msg": "✅ Query classified: Document_upload"})
+            return {"intent": "Document_upload"}
+
         messages = state.get("messages", [])
-        if not messages:
-            return state
+        user_query = self._resolve_user_query(state)
+        if not user_query:
+            if not messages:
+                return state
+            return {"intent": "Irrelevant"}
 
         writer({"type": "status", "node": "intent_classifier", "msg": "🔍 Analyzing your query..."})
-
-        user_query = self._latest_user_query(messages)
 
         if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", user_query):
             writer({"type": "status", "node": "intent_classifier", "msg": "✅ Query classified: Text_info"})
@@ -198,12 +213,12 @@ class HomeLoanAgent:
         """
         response_msg = AIMessage(
             content="I am a Home Loan Application assistant. I can only help you with home loan queries, "
-                    "document uploads, and processing your loan application. Please ask something related to home loans."
+                    "document uploads, and processing your loan application. Please continue home loan process."
         )
         
         return {
             "messages": [response_msg],
-            "paused_reason": "Irrelevant query. Waiting for valid input."
+            "paused_reason": None,
         }
     
     def homeloan_query(self, state: ApplicationState) -> Dict[str, Any]:
@@ -215,19 +230,17 @@ class HomeLoanAgent:
         
         """
         writer = get_stream_writer()
-        messages = state.get("messages", [])
-        if not messages:
+        user_query = self._resolve_user_query(state)
+        if not user_query:
             return state
 
         writer({"type": "status", "node": "homeloan_query", "msg": "💬 Finding information about your query..."})
-
-        user_query = self._latest_user_query(messages)
         
         system_prompt = """
         You are a helpful Home Loan Application assistant.
         The user is asking a general question about home loans (interest rates, eligibility, process, etc.).
         Answer their question concisely and accurately. At the end of your answer, ask if they would like to 
-        start or continue their home loan application by providing their details or documents.
+        start or continue their home loan application by providing their details or documents. Answer shortly and precisely in about 2-3 sentences. Always encourage them to proceed with the application process after answering their query.
         """
         
         prompt = ChatPromptTemplate.from_messages([
@@ -265,9 +278,62 @@ class HomeLoanAgent:
         doc_subgraph = build_document_processing_subgraph()
     
         subgraph_updates = doc_subgraph.invoke(state)
+
+        processing_status = None
+        if isinstance(subgraph_updates, dict):
+            processing_status = subgraph_updates.get("document_processing_status")
+
+        if processing_status == "unsupported":
+            writer({
+                "type": "warning",
+                "node": "document_processing",
+                "msg": "⚠️ Wrong document uploaded. We didn't process it. Please upload Aadhaar, PAN, or ITR JSON.",
+            })
+
+        if processing_status == "duplicate":
+            writer({
+                "type": "warning",
+                "node": "document_processing",
+                "msg": "⚠️ This document is already uploaded. Please upload the other document.",
+            })
+
+        if processing_status == "mismatch":
+            writer({
+                "type": "warning",
+                "node": "document_processing",
+                "msg": "⚠️ Document data mismatch detected. Wrong document may be uploaded. Re-upload correct file or start a new chat.",
+            })
         
-        result = dict(subgraph_updates)
+        # IMPORTANT: Do NOT return dict(subgraph_updates) directly.
+        # The subgraph returns the FULL accumulated state (including ALL
+        # messages from previous turns) because `messages` uses the
+        # add_messages reducer.  We must cherry-pick only the keys that
+        # carry genuinely new information and build a single fresh message.
+        _SUBGRAPH_KEYS = {
+            "uploaded_documents", "personal_info", "financial_info",
+            "employment_info", "current_processing_doc", "uploaded_docs",
+            "extracted_doc_payload", "document_processing_status",
+        }
+        result = {
+            k: subgraph_updates[k]
+            for k in _SUBGRAPH_KEYS
+            if k in subgraph_updates
+        }
         result["current_stage"] = "state_evaluation"
+
+        # Build a single NEW message summarising what the subgraph did.
+        # The subgraph's last node always adds exactly one AIMessage; grab
+        # only THAT text so we don't replay old messages.
+        subgraph_msgs = subgraph_updates.get("messages", [])
+        last_ai_text = None
+        for m in reversed(subgraph_msgs):
+            if not isinstance(m, HumanMessage):
+                content = getattr(m, "content", None)
+                if isinstance(content, str) and content.strip():
+                    last_ai_text = content.strip()
+                    break
+        if last_ai_text:
+            result["messages"] = [AIMessage(content=last_ai_text)]
 
         writer({"type": "status", "node": "document_processing", "msg": "✅ Document processing complete"})
 
@@ -287,13 +353,11 @@ class HomeLoanAgent:
             Updated state with extracted information
         """
         writer = get_stream_writer()
-        messages = state.get("messages", [])
-        if not messages:
+        user_query = self._resolve_user_query(state)
+        if not user_query:
             return state
 
         writer({"type": "status", "node": "text_info_extractor", "msg": "📝 Extracting information from your message..."})
-
-        user_query = self._latest_user_query(messages)
         
         system_prompt = """
         You are an information extraction assistant for a Home Loan Application.
@@ -445,13 +509,47 @@ class HomeLoanAgent:
         else:
             prompt_msg = "Please provide your query or information:"
         
+        resumed_input = interrupt(prompt_msg)
 
-        user_query = interrupt(prompt_msg)
-        
+        if isinstance(resumed_input, dict):
+            if "uploaded_docs" in resumed_input or "user_query" in resumed_input:
+                normalized_query = resumed_input.get("user_query")
+                normalized_docs = resumed_input.get("uploaded_docs")
+                query_text = str(normalized_query or "").strip()
+                return {
+                    "messages": [HumanMessage(content=query_text)] if query_text else [],
+                    "user_query": query_text or None,
+                    "uploaded_docs": normalized_docs if isinstance(normalized_docs, dict) else None,
+                    "paused_reason": None,
+                    "intent": None,
+                }
+
+            payload_type = str(resumed_input.get("type") or "").strip().lower()
+            if payload_type == "file_upload" and isinstance(resumed_input.get("data"), dict):
+                return {
+                    "uploaded_docs": resumed_input.get("data"),
+                    "user_query": None,
+                    "paused_reason": None,
+                    "intent": None,
+                }
+
+            if payload_type == "text":
+                text = str(resumed_input.get("message") or "").strip()
+                return {
+                    "messages": [HumanMessage(content=text)] if text else [],
+                    "user_query": text,
+                    "uploaded_docs": None,
+                    "paused_reason": None,
+                    "intent": None,
+                }
+
+        user_query = str(resumed_input or "").strip()
         return {
-            "messages": [HumanMessage(content=user_query)],
+            "messages": [HumanMessage(content=user_query)] if user_query else [],
+            "user_query": user_query,
+            "uploaded_docs": None,
             "paused_reason": None,
-            "intent": None 
+            "intent": None,
         }
     
     def loan_details_checker(self, state: ApplicationState) -> Dict[str, Any]:
@@ -777,7 +875,7 @@ class HomeLoanAgent:
             "all_documents_uploaded": state.get("all_documents_uploaded", False)
         }
         
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         saved_docs_dir = os.path.join(project_root, "saved_docs")
         os.makedirs(saved_docs_dir, exist_ok=True)
         
@@ -942,7 +1040,6 @@ class HomeLoanAgent:
             user_id=user_id,
             personal_info=personal_info,
             financial_info=financial_info,
-            employment_info=employment_info,
             financial_metrics=financial_metrics,
             emi_details=emi_details
         )

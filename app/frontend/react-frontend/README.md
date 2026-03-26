@@ -1,41 +1,16 @@
-# Home Loan React Frontend
+# React + Vite
 
-React + Vite frontend for the Home Loan assistant with 3D hero scene (`three`, `@react-three/fiber`, `@react-three/drei`) and realtime chat via WebSocket.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## Backend connectivity
+Currently, two official plugins are available:
 
-- WebSocket route expected: `/chat`
-- Default URL used by frontend: `ws://127.0.0.1:8000/chat`
-- Override with env var:
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-```bash
-VITE_WS_URL=ws://127.0.0.1:8000/chat
-```
+## React Compiler
 
-The app supports these payload patterns:
-- Normal chat: `{ "thread_id": "...", "message": "..." }`
-- Resume interrupt: `{ "thread_id": "...", "resume": ... }`
-- JSON upload: `{ "thread_id": "...", "type": "file_upload", "data": {...} }`
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## Run locally
+## Expanding the ESLint configuration
 
-From this folder:
-
-```bash
-npm install
-npm run dev
-```
-
-## Start backend (from project root)
-
-```powershell
-uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-Then open Vite URL (typically `http://127.0.0.1:5173`).
-
-## Build
-
-```bash
-npm run build
-```
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.

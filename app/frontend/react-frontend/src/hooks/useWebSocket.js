@@ -1,17 +1,19 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 
-const WS_URL = (import.meta.env.VITE_WS_URL || "ws://127.0.0.1:8000/chat").trim();
+const WS_URL = "ws://127.0.0.1:8000/chat";
 const RECONNECT_DELAY_MS = 2000;
 const WATCHDOG_INTERVAL_MS = 1500;
+const USER_ID_PREFIX = "USR";
 
 // Monotonic counter — guarantees unique ordered IDs even for rapid bursts
 let msgCounter = 1;
 function nextId() { return msgCounter++; }
+function createReadableUserId() {
+  return `${USER_ID_PREFIX}-${crypto.randomUUID()}`;
+}
 
 /**
  * Extract a human-readable string from a custom stream event payload.
- * Tries known keys first, then scans all string values, then JSON stringify.
- * Never returns empty string for a non-empty payload.
  */
 function extractStreamMessage(data) {
   if (!data) return "";
@@ -40,15 +42,34 @@ export default function useWebSocket() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentStage, setCurrentStage] = useState(null);
 
-  // Use refs where possible to avoid stale closures and prevent
-  // useEffect from re-running due to dependency chain changes.
+  const userIdRef        = useRef(createReadableUserId());
   const threadIdRef      = useRef(`loan-chat-${crypto.randomUUID()}`);
   const wsRef            = useRef(null);
-  const seenFP           = useRef(new Set());
   const mountedRef       = useRef(true);
   const reconnectTimer   = useRef(null);
   const isResettingRef   = useRef(false);
-  const connectRef       = useRef(null);   // forward-ref so handlePacket can call connect
+  const connectRef       = useRef(null);
+
+  /**
+   * PER-TURN DEDUP ONLY
+   *
+   * Dedup is scoped to ONE streaming turn (one sendMessage / resume round-trip).
+   * Cleared at the start of every user action so that:
+   *  - Within one turn, exact same text or same backend ID → suppressed (correct)
+   *  - Across turns, same text (e.g. "I am a Home Loan Application assistant...")
+   *    is allowed to appear again (correct — it IS a new response to a new query)
+   *
+   * The backend already prevents replayed old messages via:
+   *  1. nodes.py: document_processing cherry-picks subgraph keys, no accumulated msgs leak
+   *  2. main.py: per-turn sent_msg_ids with deterministic content-hash IDs
+   */
+  const turnSeenFP   = useRef(new Set());   // text fingerprints (current turn)
+  const turnSeenIds  = useRef(new Set());   // backend msg IDs   (current turn)
+
+  const resetTurnDedup = useCallback(() => {
+    turnSeenFP.current  = new Set();
+    turnSeenIds.current = new Set();
+  }, []);
 
   /* ─── helpers ─────────────────────────────────────────── */
   const addMessage = useCallback((msg) => {
@@ -56,15 +77,28 @@ export default function useWebSocket() {
     setMessages((prev) => [...prev, { id: nextId(), ...msg }]);
   }, []);
 
-  const isDuplicateBot = useCallback((text) => {
-    const fp = `bot:${text.trim()}`;
-    if (seenFP.current.has(fp)) return true;
-    seenFP.current.add(fp);
+  /**
+   * Returns true if a message should be SUPPRESSED (duplicate within this turn).
+   */
+  const isDuplicate = useCallback((text, messageId = null) => {
+    const trimmed = text.trim();
+
+    if (messageId) {
+      if (turnSeenIds.current.has(messageId)) return true;
+      turnSeenIds.current.add(messageId);
+      // also register text fingerprint to catch cross-path dups (custom + updates)
+      turnSeenFP.current.add(`bot:${trimmed}`);
+      return false;
+    }
+
+    // No ID — text fingerprint only
+    const fp = `bot:${trimmed}`;
+    if (turnSeenFP.current.has(fp)) return true;
+    turnSeenFP.current.add(fp);
     return false;
   }, []);
 
   /* ─── message router ───────────────────────────────────── */
-  // NOTE: handlePacket is stable — wraps mutable refs, not useState values.
   const handlePacket = useCallback((packet) => {
     const { event, data = {} } = packet;
 
@@ -72,37 +106,37 @@ export default function useWebSocket() {
       if (data?.replay) return;
       const text = extractStreamMessage(data);
       const type = (data?.type || "").trim().toLowerCase();
-      if (text) {
-        addMessage({ kind: type === "warning" ? "warning" : "event", text });
+      if (text && !isHiddenInternal(text)) {
+        if (!isDuplicate(text)) {
+          addMessage({ kind: type === "warning" ? "warning" : "event", text });
+        }
       }
 
     } else if (event === "updates") {
       if (data?.current_stage) setCurrentStage(data.current_stage);
-      if (Array.isArray(data?.messages)) {
-        for (const raw of data.messages) {
-          const text = String(raw).trim();
-          if (text && !isHiddenInternal(text) && !isDuplicateBot(text)) {
+      const incoming = Array.isArray(data?.bot_messages) ? data.bot_messages : data?.messages;
+      if (Array.isArray(incoming)) {
+        for (const raw of incoming) {
+          const text      = typeof raw === "string" ? raw.trim() : String(raw?.text || "").trim();
+          const messageId = typeof raw === "object"  ? String(raw?.id  || "").trim() : "";
+          if (text && !isHiddenInternal(text) && !isDuplicate(text, messageId || null)) {
             addMessage({ kind: "bot", text });
           }
         }
       }
 
     } else if (event === "interrupt") {
-      // Show the interrupt card — do NOT also add a duplicate event chip.
       setIsWaiting(true);
       setInterruptPayload(data);
       setIsProcessing(false);
 
     } else if (event === "done") {
-      // Graph finished a full turn (no interrupt).
       if (data?.current_stage) setCurrentStage(data.current_stage);
       setIsWaiting(false);
       setInterruptPayload(null);
       setIsProcessing(false);
 
     } else if (event === "end") {
-      // "end" = server finished streaming this turn.
-      // isProcessing is cleared here; isWaiting remains until "done" or user resumes.
       setIsProcessing(false);
 
     } else if (event === "error") {
@@ -110,13 +144,12 @@ export default function useWebSocket() {
       setIsProcessing(false);
       setIsWaiting(false);
     }
-  }, [addMessage, isDuplicateBot]);
+  }, [addMessage, isDuplicate]);
 
   /* ─── connect ──────────────────────────────────────────── */
   const connect = useCallback(() => {
     if (!mountedRef.current) return;
     const ws = wsRef.current;
-    // Don't open a new connection if one is already alive
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
 
     setStatus("connecting");
@@ -135,9 +168,7 @@ export default function useWebSocket() {
       catch { /* ignore malformed */ }
     };
 
-    newWs.onerror = () => {
-      // Will always be followed by onclose — no need to handle here separately
-    };
+    newWs.onerror = () => {};
 
     newWs.onclose = () => {
       if (!mountedRef.current) return;
@@ -151,7 +182,6 @@ export default function useWebSocket() {
     };
   }, [handlePacket]);
 
-  // Keep forward-ref current so the onclose timer always calls the latest `connect`
   useEffect(() => { connectRef.current = connect; }, [connect]);
 
   /* ─── lifecycle ────────────────────────────────────────── */
@@ -159,8 +189,6 @@ export default function useWebSocket() {
     mountedRef.current = true;
     connect();
 
-    // Watchdog: forcefully sync status to actual ws.readyState every 1.5 s.
-    // Catches silent drops (e.g. SIGKILL) where onclose may be delayed.
     const watchdog = setInterval(() => {
       if (!mountedRef.current) return;
       const rs = wsRef.current?.readyState;
@@ -174,20 +202,24 @@ export default function useWebSocket() {
       clearInterval(watchdog);
       clearTimeout(reconnectTimer.current);
       if (wsRef.current) {
-        wsRef.current.onclose = null;  // prevent rogue reconnects on unmount
+        wsRef.current.onclose = null;
         wsRef.current.close();
       }
     };
-  }, []); // ← empty deps: run once on mount, stable via refs
+  }, []);
 
   /* ─── send a message ───────────────────────────────────── */
   const sendMessage = useCallback(({ text = "", jsonDocument = null, isResume = false } = {}) => {
-    // Optimistically show user message before network call
+    // Reset per-turn dedup at the start of every new interaction
+    resetTurnDedup();
+
     if (text.trim())   addMessage({ kind: "user", text: text.trim() });
     if (jsonDocument)  addMessage({ kind: "user", text: `📎 Uploaded: ${jsonDocument._fileName || "document.json"}` });
 
-    // Build backend payload
-    const payload = { thread_id: threadIdRef.current };
+    const payload = {
+      thread_id: threadIdRef.current,
+      user_id: userIdRef.current,
+    };
     let normalized;
     if (jsonDocument) {
       const { _fileName, ...docData } = jsonDocument;
@@ -198,7 +230,6 @@ export default function useWebSocket() {
     if (isResume) payload.resume = normalized;
     else Object.assign(payload, normalized);
 
-    // Guard: socket must be OPEN
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       addMessage({ kind: "error", text: "Backend not connected. Please wait for reconnection and try again." });
       connectRef.current?.();
@@ -206,7 +237,6 @@ export default function useWebSocket() {
     }
 
     setIsProcessing(true);
-    // When resuming an interrupt, clear the waiting state immediately on send
     if (isResume) {
       setIsWaiting(false);
       setInterruptPayload(null);
@@ -218,25 +248,26 @@ export default function useWebSocket() {
       addMessage({ kind: "error", text: `Send failed: ${err.message}` });
       setIsProcessing(false);
     }
-  }, [addMessage]);
+  }, [addMessage, resetTurnDedup]);
 
   /* ─── new chat ─────────────────────────────────────────── */
   const resetChat = useCallback(() => {
     isResettingRef.current = true;
+    userIdRef.current = createReadableUserId();
     threadIdRef.current = `loan-chat-${crypto.randomUUID()}`;
-    seenFP.current = new Set();
+    resetTurnDedup();
     setMessages([{ id: nextId(), kind: "bot", text: WELCOME }]);
     setIsWaiting(false);
     setInterruptPayload(null);
     setIsProcessing(false);
     setCurrentStage(null);
-    // Deliberately keep the existing WebSocket open — just switch thread_id
     isResettingRef.current = false;
-  }, []);
+  }, [resetTurnDedup]);
 
   return {
     messages, status, isWaiting, interruptPayload,
     isProcessing, currentStage,
+    userId: userIdRef.current,
     threadId: threadIdRef.current,
     sendMessage, resetChat,
   };

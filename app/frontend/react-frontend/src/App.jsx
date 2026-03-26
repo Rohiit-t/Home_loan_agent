@@ -18,11 +18,11 @@ function useHashRoute() {
 }
 
 function ChatPage() {
-  const { messages, status, isWaiting, interruptPayload, isProcessing, currentStage, threadId, sendMessage, resetChat } = useWebSocket();
+  const { messages, status, isWaiting, interruptPayload, isProcessing, currentStage, userId, threadId, sendMessage, resetChat } = useWebSocket();
 
   return (
     <div className="app-shell">
-      <StatusBar status={status} threadId={threadId} onNewChat={resetChat} currentStage={currentStage} />
+      <StatusBar status={status} userId={userId} threadId={threadId} onNewChat={resetChat} currentStage={currentStage} />
       <main className="main-area">
         <header className="top-bar">
           <div className="top-bar-left">
@@ -44,7 +44,18 @@ function ChatPage() {
         </header>
 
         <ChatWindow messages={messages} isProcessing={isProcessing} isWaiting={isWaiting} interruptPayload={interruptPayload} />
-        <ChatInput onSend={sendMessage} isProcessing={isProcessing} isWaiting={isWaiting} />
+        {currentStage === "completed" ? (
+          <div className="completion-bottom-banner">
+            <div className="completion-icon">✅</div>
+            <div className="completion-content">
+              <h3 className="completion-title">Application Process Completed Successfully</h3>
+              <p className="completion-msg">Your home loan application has been submitted and a summary has been emailed to you. The bank will contact with you soon.</p>
+            </div>
+            <button className="new-app-btn" onClick={resetChat}>Start New Application</button>
+          </div>
+        ) : (
+          <ChatInput onSend={sendMessage} isProcessing={isProcessing} isWaiting={isWaiting} />
+        )}
       </main>
     </div>
   );

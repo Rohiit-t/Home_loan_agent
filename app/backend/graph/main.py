@@ -92,8 +92,8 @@ def build_graph():
         }
     )
     
-    graph.add_edge("irrelevant_handler", END)
-    graph.add_edge("homeloan_query", END)
+    graph.add_edge("irrelevant_handler", "state_evaluator")
+    graph.add_edge("homeloan_query", "state_evaluator")
     graph.add_edge("document_processing", "state_evaluator")
     graph.add_edge("text_info", "state_evaluator")
     

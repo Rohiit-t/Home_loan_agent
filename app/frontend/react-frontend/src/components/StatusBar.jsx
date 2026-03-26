@@ -31,7 +31,7 @@ function StageTracker({ currentStage }) {
   );
 }
 
-export default function StatusBar({ status, threadId, onNewChat, currentStage }) {
+export default function StatusBar({ status, userId, threadId, onNewChat, currentStage }) {
   const dotClass =
     status === "connected" ? "status-dot status-dot--green"
     : status === "connecting" ? "status-dot status-dot--yellow"
@@ -75,6 +75,7 @@ export default function StatusBar({ status, threadId, onNewChat, currentStage })
       {/* Session */}
       <div className="sidebar-section">
         <p className="sidebar-section-label">Session</p>
+        <code className="session-id">{userId}</code>
         <code className="session-id">{threadId}</code>
       </div>
 

@@ -12,8 +12,10 @@ class DocumentMeta(TypedDict):
 class ApplicationState(TypedDict):
 
     user_id: Optional[str]
+    user_query: Optional[str]
+    uploaded_docs: Optional[dict]
     messages: Annotated[List[BaseMessage] , add_messages]
-    intent: str
+    intent: Optional[str]
     current_stage: str
     last_valid_stage: str
 
@@ -21,6 +23,8 @@ class ApplicationState(TypedDict):
     all_documents_uploaded: bool
     missing_documents: List[str]
     current_processing_doc: Optional[str]
+    extracted_doc_payload: Optional[dict]
+    document_processing_status: Optional[str]
 
     personal_info: dict
     financial_info: dict
