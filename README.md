@@ -1,528 +1,295 @@
-# Home Loan Application System 🏠
+# Home Loan LangGraph 🏠
 
-A complete full-stack intelligent assistant for processing home loan applications with **Streamlit frontend** and LangGraph backend. Features automated document processing, information extraction, risk assessment, and multiple human-in-the-loop interrupt points.
+AI-assisted home loan workflow with:
+- **LangGraph backend** for stateful multi-step processing
+- **FastAPI WebSocket API** for real-time streaming events
+- **React + Vite frontend** for interactive chat UI
 
-## 🚀 Quick Start - Run the Application
-
-```powershell
-# 1. Activate virtual environment
-.\venv\Scripts\Activate.ps1
-
-# 2. Set API key (create .env file with OPENROUTER_API_KEY)
-
-# 3. Launch Streamlit app
-streamlit run app.py
-```
-
-**OR use the convenient launcher:**
-```powershell
-.\run_app.ps1
-```
-
-The application will open at `http://localhost:8501` with a user-friendly interface!
-
-📖 **See [QUICKSTART.md](QUICKSTART.md) for detailed setup guide**
+The system supports document intake, text extraction, loan detail collection, risk assessment, EMI breakdown, persistence (JSON + PostgreSQL), and async email notifications.
 
 ---
 
-## 🌟 Features
+## Tech Stack
 
-### Frontend (Streamlit)
-- **Interactive Chat Interface**: Conversational UI with AI assistant
-- **Document Upload**: Drag-and-drop file upload with type selection
-- **Real-time Status Tracking**: Sidebar showing progress and completion status
-- **Dynamic Input Panels**: Context-aware UI adapting to current workflow stage
-- **Paused Reason Display**: Clear guidance on what's needed next at each interrupt
-- **Action Buttons**: Quick actions for confirmation and navigation
+### Backend
+- Python 3.10+
+- LangGraph + LangChain
+- FastAPI + Uvicorn (WebSocket endpoint)
+- Pydantic
+- PostgreSQL (`psycopg2-binary`)
 
-### Backend (LangGraph)
-- **Intent Classification**: Automatically determines user intent
-- **Multi-modal Input**: Accepts both text and document uploads
-- **Document Processing Subgraph**: Modular 3-node pipeline for document verification and extraction
-- **Information Extraction**: Extracts personal, financial, and employment details
-- **Iterative Data Collection**: Loops until all required information is obtained
-- **Risk Assessment**: Calculates LTV, FOIR, and analyzes CIBIL scores
-- **Multiple HITL Interrupts**: Four interrupt points for human interaction
-  - **Interrupt 1**: Missing documents collection
-  - **Interrupt 2**: Missing information collection
-  - **Interrupt 3**: Loan details input
-  - **Interrupt 4**: Save confirmation
-- **Data Persistence**: Dual storage - PostgreSQL database + JSON files in `saved_docs/` folder
-- **State Preservation**: Maintains data integrity across multiple loop iterations
+### Frontend
+- React 19
+- Vite
+- Native WebSocket client
+- Three.js (`@react-three/fiber`, `@react-three/drei`) for landing visuals
 
-## 📊 Complete Workflow
+---
 
-```
-┌─────────────────────┐
-│   User Message      │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Intent Classifier   │
-└──────────┬──────────┘
-           │
-     ┌─────┴─────────────────────┐
-     │                           │
-     ▼                           ▼
-┌─────────────┐         ┌──────────────────┐
-│ Irrelevant  │         │ Homeloan Query   │
-│  Handler    │         │    Handler       │
-└──────┬──────┘         └────────┬─────────┘
-       │                         │
-       └────────┬────────────────┘
-                │
-                ▼
-         ┌─────────────┐
-         │     END     │
-         └─────────────┘
+## Current Architecture
 
-     ┌──────────────────────┐
-     │  Document_upload     │
-     └──────────┬───────────┘
-                │
-                ▼
-     ┌──────────────────────┐
-     │ Document Processing  │
-     │     SUBGRAPH:        │
-     │  ├─ Tampering Check  │
-     │  ├─ Classification   │
-     │  └─ Data Extraction  │
-     └──────────┬───────────┘
-                │
-                ▼
-     ┌──────────────────────┐
-     │  State Evaluator     │◄──────┐
-     └──────────┬───────────┘       │
-                │                   │
-         [Missing Data?]            │
-                │                   │
-                ▼                   │
-     ┌──────────────────────┐       │
-     │ Text Info Extractor  ├───────┘
-     └──────────────────────┘
+### Core graph
+- Graph builder: `app/backend/graph/main.py`
+- State schema: `app/backend/graph/state.py`
+- Main node logic: `app/backend/graph/nodes/agent.py`
+- Document subgraph: `app/backend/graph/nodes/document_processing.py`
 
-     ┌──────────────────────┐
-     │ Loan Details         │
-     │   Collector          │
-     └──────────┬───────────┘
-                │
-                ▼
-     ┌──────────────────────┐
-     │ Financial Risk       │
-     │    Assessment        │
-     │  • LTV Check         │
-     │  • FOIR Check        │
-     │  • CIBIL Check       │
-     └──────────┬───────────┘
-                │
-                ▼
-     ┌──────────────────────┐
-     │ Save Confirmation    │
-     │  (Ask User)          │
-     └──────────┬───────────┘
-                │
-          [User Response]
-                │
-        ┌───────┴────────┐
-        │                │
-        ▼                ▼
-   ┌─────────┐      ┌──────────┐
-   │  Save   │      │   Skip   │
-   │  Data   │      │   Save   │
-   └────┬────┘      └─────┬────┘
-        │                 │
-        └────────┬────────┘
-                 │
-                 ▼
-         ┌──────────────┐
-         │     END      │
-         └──────────────┘
-```
+### API layer
+- FastAPI WebSocket server: `app/backend/api/main.py`
+- WebSocket route: `/chat`
+- Streams:
+  - `custom` events (status/warnings)
+  - `updates` events (node updates + bot messages)
+  - `interrupt` events (HITL pause)
+  - `done` and `end`
 
-## 🏗️ Architecture
+### Frontend
+- React app root: `app/frontend/react-frontend/src/App.jsx`
+- WebSocket hook: `app/frontend/react-frontend/src/hooks/useWebSocket.js`
+- Shows distinct completion/failure bottom banners:
+  - `completed` → success banner
+  - `failed_max_retries` → red failure banner
 
-This project follows **LangGraph industry standards** with a **class-based agent architecture**:
+---
 
-- ✅ All node logic encapsulated in a single `HomeLoanAgent` class
-- ✅ Document processing as a reusable subgraph
-- ✅ Clean separation of concerns
-- ✅ Centralized configuration management
-- ✅ Human-in-the-loop interrupts for data approval
-- ✅ State preservation across loop iterations
-- ✅ Easy to test, maintain, and extend
+## Workflow Overview
 
-See [WORKFLOW_GUIDE.md](WORKFLOW_GUIDE.md) for detailed workflow documentation.
+1. `intent_classifier`
+2. Route to one of:
+   - `irrelevant_handler`
+   - `homeloan_query`
+   - `document_processing`
+   - `text_info`
+3. `state_evaluator`
+4. If docs missing → `interrupt_handler` loop
+5. If docs complete → `loan_details`
+6. If loan details complete → `financial_risk`
+7. `emi_calculator`
+8. `save_json`
+9. `save_db`
+10. `email_notification`
+11. `END`
 
-## 🚀 Installation & Setup
+---
 
-### Prerequisites
-- Python 3.10 or higher
-- Virtual environment (recommended)
-- OpenRouter API key (for LLM)
-- PostgreSQL (for database storage)
+## Retry & Failure Guardrails
 
-### Installation Steps
+The graph now has explicit max-retry guards to prevent infinite loops.
+
+### Document collection loop
+- Tracks `doc_retry_count`
+- Max retries: `3`
+- Invalid/irrelevant document attempts increment counter
+- Any meaningful progress resets counter
+- On max retries:
+  - `current_stage = "failed_max_retries"`
+  - Graph routes to `END`
+  - Frontend shows failure banner with “Start New Application”
+
+### Loan details loop
+- Tracks `retry_count`
+- Max retries: `3`
+- If LLM extracts at least one valid loan detail, retry is **not** incremented
+- Only irrelevant/invalid replies increment retry
+- On max retries:
+  - `current_stage = "failed_max_retries"`
+  - Graph routes to `END`
+  - Frontend shows failure banner with “Start New Application”
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- PostgreSQL (optional but recommended for DB persistence)
+- OpenRouter API key
+
+---
+
+## Setup
+
+### 1) Clone and create Python environment (Windows PowerShell)
 
 ```powershell
-# Navigate to project
+git clone <your-repo-url>
 cd "Home loan-langGraph"
-
-# Create virtual environment
 python -m venv venv
-
-# Activate virtual environment (Windows)
 .\venv\Scripts\Activate.ps1
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Create .env file with API key
-"OPENROUTER_API_KEY=your_api_key_here" | Out-File -FilePath .env -Encoding utf8
 ```
 
-### Database Configuration
+### 2) Install backend dependencies
 
-The application saves data to **both PostgreSQL database and JSON files** for redundancy.
-
-**Quick Setup:**
-
-1. **Install PostgreSQL** on your system (if not already installed)
-
-2. **Create Database:**
-   ```sql
-   CREATE DATABASE homeloan_db;
-   ```
-
-3. **Update Configuration:**
-   Edit `app/static/config.py` and update the `DATABASE_URL`:
-   ```python
-   DATABASE_URL = "postgresql://your_username:your_password@localhost:5432/homeloan_db"
-   ```
-
-4. **The table is created automatically** on first run
-
-📖 **See [DATABASE_SETUP.md](DATABASE_SETUP.md) for detailed database configuration and troubleshooting**
-
-### Run the Application
-
-**Option 1: Using the launcher script (Recommended)**
 ```powershell
-.\run_app.ps1
+pip install -r app/static/requirements.txt
 ```
 
-**Option 2: Direct Streamlit command**
+### 3) Configure API key
+
+Create `.env` in project root:
+
+```env
+OPENROUTER_API_KEY=your_openrouter_api_key
+```
+
+### 4) Frontend setup
+
 ```powershell
-streamlit run app.py
+cd app/frontend/react-frontend
+npm install
 ```
-
-**Option 3: Different port**
-```powershell
-streamlit run app.py --server.port 8502
-```
-
-The application will automatically open in your default browser at `http://localhost:8501`
 
 ---
 
-## 🎯 Using the Frontend
+## Run the Project
 
-### Starting a New Application
+### Terminal 1: Start backend API
 
-1. **Click "🚀 Start Application"** button
-2. System initializes and asks for first document
-
-### Document Upload Stage
-
-```
-⏸️ Action Required: Waiting for documents: aadhaar, pan, itr
+```powershell
+cd "Home loan-langGraph"
+.\venv\Scripts\Activate.ps1
+uvicorn app.backend.api.main:app --reload
 ```
 
-- Use the **file uploader** on the right panel
-- Select document type from dropdown
-- Click "Upload Document"
-- System automatically extracts data
+Backend listens on `http://127.0.0.1:8000` and WebSocket on `ws://127.0.0.1:8000/chat`.
 
-### Information Input Stage
+### Terminal 2: Start React frontend
 
-```
-⏸️ Action Required: Waiting for info: personal_info, financial_info
+```powershell
+cd "Home loan-langGraph\app\frontend\react-frontend"
+npm run dev
 ```
 
-- Enter details in the **text area**
-- Can use natural language: "My name is John, salary 50000, EMIs 5000"
-- Click "Submit Information"
-
-### Loan Details Stage
-
-```
-⏸️ Action Required: Waiting for loan details: home_loan_amount, down_payment
-```
-
-- Fill in the **loan form** fields:
-  - Home Loan Amount
-  - Down Payment
-  - Tenure (years)
-- Click "Submit Loan Details"
-
-### Save Confirmation Stage
-
-```
-⏸️ Action Required: Waiting for user confirmation to save data
-```
-
-- Review your application
-- Click "✅ Yes, Save" to save
-- Or "❌ No, Skip" to discard
-
-### Completion
-
-Application saved to `saved_docs/application_{user_id}_{timestamp}.json`
+Open the Vite URL shown in terminal (usually `http://localhost:5173`).
 
 ---
 
-## 📘 Documentation
+## WebSocket Payload Format
 
-- [QUICKSTART.md](QUICKSTART.md) - Quick setup and test flow
-- [FRONTEND_GUIDE.md](FRONTEND_GUIDE.md) - Complete Streamlit UI guide
-- [WORKFLOW_GUIDE.md](WORKFLOW_GUIDE.md) - Backend workflow details
-- [STATE_EVALUATOR_GUIDE.md](STATE_EVALUATOR_GUIDE.md) - State management details
-- [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Technical summary
+### Send text
 
----
-
-## 🧪 Programmatic Usage (Advanced)
-
-For developers who want to use the backend directly without the frontend:
-
-### Basic Usage
-
-```python
-from langchain_core.messages import HumanMessage
-from util.graph import build_graph
-
-# Build the LangGraph application
-app = build_graph()
-
-# Initialize state
-initial_state = {
-    "messages": [HumanMessage(content="I want to apply for a home loan")],
-    "intent": None,
-    "current_stage": "initial",
-    "uploaded_documents": {},
-    "personal_info": {},
-    "financial_info": {},
-    "employment_info": {},
-    "all_documents_uploaded": False,
-    "paused_reason": None
-}
-
-# Run the graph
-result = app.invoke(initial_state)
-
-# Access the response
-print(result["messages"][-1].content)
-```
-
-## 📁 Project Structure
-
-```
-Home loan-langGraph/
-├── app.py                          # 🎨 Streamlit frontend application
-├── run_app.ps1                     # 🚀 Windows launcher script
-├── nodes/
-│   ├── agent.py                    # HomeLoanAgent class (all 10 nodes)
-│   ├── document_processing.py     # Document processing subgraph
-│   └── __init__.py
-├── util/
-│   ├── graph.py                    # Graph builder with interrupt config
-│   └── model.py                    # LLM utilities
-├── state.py                        # ApplicationState TypedDict schema
-├── config.py                       # Configuration (thresholds, requirements)
-├── mock_data/                      # Sample documents for testing
-│   ├── aadhaar.json
-│   ├── pan.json
-│   └── itr.json
-├── saved_docs/                     # 💾 Saved application JSON files
-├── tests/                          # 🧪 Test suite (8 test files)
-├── requirements.txt
-├── QUICKSTART.md                   # ⚡ Quick start guide  
-├── FRONTEND_GUIDE.md              # 📱 Complete frontend documentation
-├── WORKFLOW_GUIDE.md              # 🔄 Backend workflow details
-├── STATE_EVALUATOR_GUIDE.md       # 📋 State management guide
-└── IMPLEMENTATION_SUMMARY.md      # 📊 Technical summary
-```
-
-## 🔄 Workflow
-
-```
-User Input → Intent Classification
-    ↓
-    ├─→ Irrelevant → END
-    ├─→ Home Loan Query → Answer → END
-    ├─→ Document Upload → Process → State Evaluation
-    └─→ Text Information → Extract → State Evaluation
-                                          ↓
-                                    Check Completeness
-                                          ↓
-                                    Loan Details Collection
-                                          ↓
-                                    Financial Risk Assessment
-                                          ↓
-                                        END
-```
-
-## 🧪 Example Interactions
-
-### Asking a Query
-```python
-state = {"messages": [HumanMessage(content="What is the interest rate?")]}
-result = app.invoke(state)
-# Gets an answer about interest rates and prompts to start application
-```
-
-### Providing Information
-```python
-state = {"messages": [HumanMessage(content="My name is John, I earn $5000 monthly")]}
-result = app.invoke(state)
-# Extracts name and income information
-```
-
-### Loan Details
-```python
-state = {
-    "messages": [HumanMessage(content="I need a loan of $300k with $50k down payment for 20 years")],
-    "current_stage": "loan_details_collection"
-}
-result = app.invoke(state)
-# Processes and validates loan details
-```
-
-## ⚙️ Configuration
-
-Edit `config.py` to customize:
-
-```python
-# Document requirements
-MANDATORY_DOCS = ["pan", "aadhaar", "salary_slip", "bank_statement", "property_doc"]
-
-# Risk thresholds
-LTV_THRESHOLD = 80.0   # Loan to Value (%)
-FOIR_THRESHOLD = 50.0  # Fixed Obligation to Income Ratio (%)
-MIN_CIBIL = 700        # Minimum credit score
-```
-
-## 🔧 Extending the System
-
-### Adding a New Node
-
-1. Add a method to `HomeLoanAgent` class in `nodes/agent.py`:
-
-```python
-class HomeLoanAgent:
-    # ... existing methods ...
-    
-    def new_node(self, state: ApplicationState) -> ApplicationState:
-        """Your new node logic here."""
-        # Process state
-        return updated_state
-```
-
-2. Register it in `util/graph.py`:
-
-```python
-def build_graph():
-    agent = HomeLoanAgent()
-    graph = StateGraph(ApplicationState)
-    
-    graph.add_node("new_node", agent.new_node)
-    # Add edges...
-```
-
-## 📊 State Schema
-
-```python
+```json
 {
-    "user_id": str,
-    "messages": List[BaseMessage],
-    "intent": str,
-    "current_stage": str,
-    "uploaded_documents": Dict[str, DocumentMeta],
-    "all_documents_uploaded": bool,
-    "personal_info": dict,
-    "financial_info": dict,
-    "employment_info": dict,
-    "financial_metrics": dict,
-    "paused_reason": str,
-    "retry_count": int
+  "type": "text",
+  "message": "I need a loan of 50 lakhs for 20 years",
+  "user_id": "USR-...",
+  "thread_id": "loan-chat-..."
 }
 ```
 
-## 🧑‍💻 Development
+### Send document JSON
 
-### Running Tests
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run specific test
-pytest tests/test_intent.py
+```json
+{
+  "type": "file_upload",
+  "data": { "doc_type": "pan", "...": "..." },
+  "user_id": "USR-...",
+  "thread_id": "loan-chat-..."
+}
 ```
 
-### Code Style
+### Resume interrupt
 
-This project follows Python best practices:
-- Type hints throughout
-- Comprehensive docstrings
-- Clean code principles
-- SOLID design patterns
-
-## 📝 Recent Updates
-
-### Version 3.0 (Current) - Full-Stack Release 🎉
-- ✨ **Streamlit Frontend**: Complete interactive UI with chat interface
-- 🎯 **Four HITL Interrupt Points**: Missing docs, missing info, loan details, save confirmation
-- 📊 **Real-time Status Tracking**: Sidebar with progress indicators
-- 🔄 **Iterative Data Collection**: Loops until all requirements met
-- 💾 **Data Persistence**: Dual storage - PostgreSQL database + JSON file backup to `saved_docs/`
-- 📋 **Paused Reason Display**: Prominent guidance at each interrupt
-- 🎨 **Custom UI Components**: Styled boxes for different message types
-- 🚀 **PowerShell Launcher**: One-click application startup
-- 📚 **Comprehensive Documentation**: 5 detailed guides
-
-### Version 2.0 (Previous)
-- ✅ Migrated to class-based architecture
-- ✅ Centralized configuration management
-- ✅ Document processing subgraph
-- ✅ State preservation across loops
-- ✅ Better code organization
-
-### Version 1.0 (Legacy)
-- Individual function-based nodes
-- Basic functionality
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is part of a home loan processing system implementation.
-
-## 🆘 Support
-
-For detailed architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
+```json
+{
+  "resume": { "type": "text", "message": "Down payment is 10 lakhs" },
+  "user_id": "USR-...",
+  "thread_id": "loan-chat-..."
+}
+```
 
 ---
 
-**Built with**: LangGraph, LangChain, Streamlit, Python 3.10+  
-**Architecture**: Class-based Agent Pattern with Subgraphs  
-**Frontend**: Interactive Streamlit UI  
-**Status**: Production Ready ✅  
+## Configuration
 
-🚀 **Start now**: `streamlit run app.py`
+Edit `app/static/config.py` for:
+- `MANDATORY_DOCS`
+- `LTV_THRESHOLD`, `FOIR_THRESHOLD`, `MIN_CIBIL`
+- `DEFAULT_INTEREST_RATE`
+- `DATABASE_URL`
+- SMTP settings for email notifications
+
+> Note: move secrets (SMTP credentials, DB URL) to environment variables for production use.
+
+---
+
+## Testing
+
+Project tests are in `app/tests/`.
+
+Run all tests:
+
+```powershell
+cd "Home loan-langGraph"
+.\venv\Scripts\Activate.ps1
+pytest app/tests -q
+```
+
+Run a specific test:
+
+```powershell
+pytest app/tests/test_loan_details_interrupt.py -q
+```
+
+---
+
+## Utility: Graph Visualization
+
+Generate graph visualization/ASCII/Mermaid output:
+
+```powershell
+cd "Home loan-langGraph"
+.\venv\Scripts\Activate.ps1
+python visualize_graph.py
+```
+
+This can generate `graph_visualization.png` in project root.
+
+---
+
+## Project Structure
+
+```text
+Home loan-langGraph/
+├── app/
+│   ├── backend/
+│   │   ├── api/
+│   │   │   └── main.py
+│   │   ├── graph/
+│   │   │   ├── main.py
+│   │   │   ├── state.py
+│   │   │   └── nodes/
+│   │   │       ├── agent.py
+│   │   │       └── document_processing.py
+│   │   ├── services/
+│   │   │   └── email_services.py
+│   │   └── util/
+│   │       └── model.py
+│   ├── frontend/
+│   │   ├── react-frontend/
+│   │   │   ├── src/
+│   │   │   └── package.json
+│   │   ├── src.py
+│   │   └── terminal_based_frontend.py
+│   ├── static/
+│   │   ├── config.py
+│   │   └── requirements.txt
+│   └── tests/
+├── saved_docs/
+├── visualize_graph.py
+└── README.md
+```
+
+---
+
+## Notes
+
+- Root README now reflects the **current React + FastAPI flow** (not only Streamlit).
+- Legacy/alternate frontends still exist under `app/frontend/` (`src.py`, `terminal_based_frontend.py`, `without_api.py`).
+- The backend uses LangGraph checkpointer memory for thread-scoped conversation state.
+
+---
+
+## License
+
+Internal project / custom implementation.
