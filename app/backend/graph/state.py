@@ -40,3 +40,4 @@ class ApplicationState(TypedDict):
     application_saved: bool
     email_sent: bool
     retry_count: int
+    doc_retry_count: int

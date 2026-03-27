@@ -8,6 +8,10 @@ import re
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 from typing import Literal
+import threading
+import logging
+
+logger = logging.getLogger("home-loan-email")
 
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -211,11 +215,49 @@ class HomeLoanAgent:
         Provides a polite response to guide user back on topic.
 
         """
+        all_docs_uploaded = state.get("all_documents_uploaded", False)
+        doc_retry_count = int(state.get("doc_retry_count", 0) or 0)
+        max_retry_count = 3
+
+        if not all_docs_uploaded:
+            doc_retry_count += 1
+            attempts_left = max_retry_count - doc_retry_count
+
+            if doc_retry_count >= max_retry_count:
+                fail_msg = AIMessage(
+                    content=(
+                        "❌ Unsuccessful process: maximum retry attempts reached.\n\n"
+                        "You provided irrelevant/invalid responses multiple times while uploading required documents. "
+                        "Please start a new application."
+                    )
+                )
+                return {
+                    "messages": [fail_msg],
+                    "paused_reason": "Maximum retries reached in document collection loop.",
+                    "current_stage": "failed_max_retries",
+                    "all_documents_uploaded": False,
+                    "doc_retry_count": doc_retry_count,
+                }
+
+            response_msg = AIMessage(
+                content=(
+                    "I am a Home Loan Application assistant. I can only help you with home loan queries, "
+                    "document uploads, and processing your loan application. Please continue home loan process.\n"
+                    f"Retry {doc_retry_count}/{max_retry_count}. Attempts left: {attempts_left}."
+                )
+            )
+            return {
+                "messages": [response_msg],
+                "paused_reason": "Waiting for relevant input during document collection.",
+                "current_stage": "awaiting_documents",
+                "all_documents_uploaded": False,
+                "doc_retry_count": doc_retry_count,
+            }
+
         response_msg = AIMessage(
             content="I am a Home Loan Application assistant. I can only help you with home loan queries, "
                     "document uploads, and processing your loan application. Please continue home loan process."
         )
-        
         return {
             "messages": [response_msg],
             "paused_reason": None,
@@ -303,6 +345,29 @@ class HomeLoanAgent:
                 "node": "document_processing",
                 "msg": "⚠️ Document data mismatch detected. Wrong document may be uploaded. Re-upload correct file or start a new chat.",
             })
+
+        bad_statuses = {"unsupported", "duplicate", "mismatch"}
+        max_retry_count = 3
+        doc_retry_count = int(state.get("doc_retry_count", 0) or 0)
+
+        if processing_status in bad_statuses:
+            doc_retry_count += 1
+            if doc_retry_count >= max_retry_count:
+                fail_msg = (
+                    "❌ Unsuccessful process: maximum retry attempts reached.\n\n"
+                    "Multiple invalid document attempts detected (wrong/re-uploaded/mismatch). "
+                    "Please start a new application."
+                )
+                return {
+                    "messages": [AIMessage(content=fail_msg)],
+                    "paused_reason": "Maximum retries reached in document collection loop.",
+                    "current_stage": "failed_max_retries",
+                    "all_documents_uploaded": False,
+                    "doc_retry_count": doc_retry_count,
+                }
+        else:
+            # Reset consecutive retry counter on meaningful document progress.
+            doc_retry_count = 0
         
         # IMPORTANT: Do NOT return dict(subgraph_updates) directly.
         # The subgraph returns the FULL accumulated state (including ALL
@@ -334,6 +399,8 @@ class HomeLoanAgent:
                     break
         if last_ai_text:
             result["messages"] = [AIMessage(content=last_ai_text)]
+
+        result["doc_retry_count"] = doc_retry_count
 
         writer({"type": "status", "node": "document_processing", "msg": "✅ Document processing complete"})
 
@@ -424,6 +491,7 @@ class HomeLoanAgent:
             "financial_info": financial_info,
             "employment_info": employment_info,
             "messages": [msg],
+            "doc_retry_count": 0,
         }
     
     def state_evaluator(self, state: ApplicationState) -> Dict[str, Any]:
@@ -441,6 +509,12 @@ class HomeLoanAgent:
         """
         writer = get_stream_writer()
         writer({"type": "status", "node": "state_evaluator", "msg": "📋 Checking document status..."})
+
+        if state.get("current_stage") == "failed_max_retries":
+            return {
+                "all_documents_uploaded": False,
+                "current_stage": "failed_max_retries",
+            }
 
         uploaded_docs = state.get("uploaded_documents", {})
         missing_docs = [
@@ -464,6 +538,7 @@ class HomeLoanAgent:
                 "paused_reason": f"Waiting for documents: {', '.join(missing_docs)}",
                 "all_documents_uploaded": False,
                 "current_stage": "awaiting_documents",
+                "doc_retry_count": int(state.get("doc_retry_count", 0) or 0),
             }
         
         msg = (
@@ -480,6 +555,7 @@ class HomeLoanAgent:
             "paused_reason": None,
             "all_documents_uploaded": True,
             "current_stage": "loan_details_collection",
+            "doc_retry_count": 0,
         }
     
     def interrupt_handler(self, state: ApplicationState) -> ApplicationState:
@@ -565,6 +641,8 @@ class HomeLoanAgent:
         writer({"type": "status", "node": "loan_details_checker", "msg": "💰 Checking loan details..."})
 
         financial_info = dict(state.get("financial_info", {}) or {})
+        retry_count = int(state.get("retry_count", 0) or 0)
+        max_retry_count = 3
 
         def missing_fields(info: Dict[str, Any]) -> list:
             missing = []
@@ -587,6 +665,18 @@ class HomeLoanAgent:
 
             user_reply = interrupt(prompt_msg)
 
+            query_text = ""
+            if isinstance(user_reply, dict):
+                query_text = str(
+                    user_reply.get("user_query")
+                    or user_reply.get("message")
+                    or ""
+                ).strip()
+            else:
+                query_text = str(user_reply or "").strip()
+
+            extracted_any = False
+
             # Parse reply with structured LLM
             system_prompt = """
             You are a loan details extraction assistant.
@@ -602,16 +692,54 @@ class HomeLoanAgent:
                 ("user", "{query}"),
             ])
 
-            llm = get_structured_model()
-            structured_llm = llm.with_structured_output(LoanDetails)
-            result = (prompt | structured_llm).invoke({"query": user_reply})
+            if query_text:
+                llm = get_structured_model()
+                structured_llm = llm.with_structured_output(LoanDetails)
+                result = (prompt | structured_llm).invoke({"query": query_text})
 
-            if result.home_loan_amount and result.home_loan_amount > 0:
-                financial_info["home_loan_amount"] = result.home_loan_amount
-            if result.down_payment is not None and result.down_payment >= 0:
-                financial_info["down_payment"] = result.down_payment
-            if result.tenure_years and result.tenure_years > 0:
-                financial_info["tenure_years"] = result.tenure_years
+                if result.home_loan_amount and result.home_loan_amount > 0:
+                    financial_info["home_loan_amount"] = result.home_loan_amount
+                    extracted_any = True
+                if result.down_payment is not None and result.down_payment >= 0:
+                    financial_info["down_payment"] = result.down_payment
+                    extracted_any = True
+                if result.tenure_years and result.tenure_years > 0:
+                    financial_info["tenure_years"] = result.tenure_years
+                    extracted_any = True
+
+            if not extracted_any:
+                retry_count += 1
+                attempts_left = max_retry_count - retry_count
+
+                if retry_count >= max_retry_count:
+                    fail_msg = (
+                        "❌ Unsuccessful process: maximum retry attempts reached.\n\n"
+                        "You provided irrelevant/invalid responses 3 times while collecting loan details. "
+                        "Please start a new application."
+                    )
+                    writer({"type": "warning", "node": "loan_details_checker", "msg": "❌ Maximum retries reached"})
+                    return {
+                        "messages": [AIMessage(content=fail_msg)],
+                        "paused_reason": "Maximum retries reached in loan details collection.",
+                        "all_loan_details_provided": False,
+                        "current_stage": "failed_max_retries",
+                        "financial_info": financial_info,
+                        "retry_count": retry_count,
+                    }
+
+                retry_msg = (
+                    "I couldn't extract valid loan details from your last response.\n"
+                    "Please provide at least one of these clearly: Home Loan Amount, Down Payment, Tenure (years).\n"
+                    f"Retry {retry_count}/{max_retry_count}. Attempts left: {attempts_left}."
+                )
+                return {
+                    "messages": [AIMessage(content=retry_msg)],
+                    "paused_reason": "Waiting for valid loan details input.",
+                    "all_loan_details_provided": False,
+                    "current_stage": "awaiting_loan_details",
+                    "financial_info": financial_info,
+                    "retry_count": retry_count,
+                }
 
         # Re-evaluate completeness
         missing = missing_fields(financial_info)
@@ -628,6 +756,7 @@ class HomeLoanAgent:
                 "all_loan_details_provided": False,
                 "current_stage": "awaiting_loan_details",
                 "financial_info": financial_info,
+                "retry_count": retry_count,
             }
 
         success_msg = (
@@ -646,6 +775,7 @@ class HomeLoanAgent:
             "all_loan_details_provided": True,
             "current_stage": "financial_risk_check",
             "financial_info": financial_info,
+            "retry_count": 0,
         }
     
     def financial_risk_checker(self, state: ApplicationState) -> Dict[str, Any]:
@@ -1032,22 +1162,30 @@ class HomeLoanAgent:
             }
         
         # Call email service
-        writer({"type": "status", "node": "email_notification", "msg": "📬 Sending email..."})
+        writer({"type": "status", "node": "email_notification", "msg": "📬 Queueing email in background..."})
 
-        msg, email_sent = send_application_summary_email(
-            recipient_email=recipient_email,
-            applicant_name=applicant_name,
-            user_id=user_id,
-            personal_info=personal_info,
-            financial_info=financial_info,
-            financial_metrics=financial_metrics,
-            emi_details=emi_details
-        )
-        
+        def send_async_email() -> None:
+            try:
+                msg, email_sent = send_application_summary_email(
+                    recipient_email=recipient_email,
+                    applicant_name=applicant_name,
+                    user_id=user_id,
+                    personal_info=personal_info,
+                    financial_info=financial_info,
+                    financial_metrics=financial_metrics,
+                    emi_details=emi_details
+                )
+                logger.info("[user_id=%s] async email result: %s | sent=%s", user_id, msg, email_sent)
+            except Exception as exc:
+                logger.exception("[user_id=%s] async email failed: %s", user_id, exc)
+
+        threading.Thread(target=send_async_email, daemon=True).start()
+
+        msg = f"📨 Email: Summary queued for {recipient_email}. You will receive it shortly."
         writer({"type": "status", "node": "email_notification", "msg": msg})
 
         return {
             "messages": [AIMessage(content=msg)],
-            "email_sent": email_sent,
+            "email_sent": True,
             "current_stage": "completed",
         }

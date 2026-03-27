@@ -35,6 +35,9 @@ def route_evaluation(state: ApplicationState) -> str:
     Routes after state evaluation.
     Routes to interrupt_handler if docs missing, loan_details if all docs present.
     """
+    if state.get("current_stage") == "failed_max_retries":
+        return "failed"
+
     all_docs_uploaded = state.get("all_documents_uploaded", False)
     
     if all_docs_uploaded:
@@ -48,6 +51,9 @@ def route_loan_details(state: ApplicationState) -> str:
     Routes after loan details check.
     Routes back to loan_details if details missing, financial_risk if all present.
     """
+    if state.get("current_stage") == "failed_max_retries":
+        return "failed"
+
     all_loan_details_provided = state.get("all_loan_details_provided", False)
 
     if all_loan_details_provided:
@@ -102,7 +108,8 @@ def build_graph():
         route_evaluation,
         {
             "interrupt_handler": "interrupt_handler",
-            "loan_details": "loan_details"
+            "loan_details": "loan_details",
+            "failed": END,
         }
     )
 
@@ -114,6 +121,7 @@ def build_graph():
         {
             "loan_details": "loan_details",
             "financial_risk": "financial_risk",
+            "failed": END,
         }
     )
     

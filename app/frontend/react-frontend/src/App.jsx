@@ -49,7 +49,16 @@ function ChatPage() {
             <div className="completion-icon">✅</div>
             <div className="completion-content">
               <h3 className="completion-title">Application Process Completed Successfully</h3>
-              <p className="completion-msg">Your home loan application has been submitted and a summary has been emailed to you. The bank will contact with you soon.</p>
+              <p className="completion-msg">Your home loan application has been submitted . The bank will contact with you soon.</p>
+            </div>
+            <button className="new-app-btn" onClick={resetChat}>Start New Application</button>
+          </div>
+        ) : currentStage === "failed_max_retries" ? (
+          <div className="failure-bottom-banner">
+            <div className="failure-icon">❌</div>
+            <div className="failure-content">
+              <h3 className="failure-title">Application Process Unsuccessful</h3>
+              <p className="failure-msg">Maximum retry attempts reached. Please start a new application.</p>
             </div>
             <button className="new-app-btn" onClick={resetChat}>Start New Application</button>
           </div>
