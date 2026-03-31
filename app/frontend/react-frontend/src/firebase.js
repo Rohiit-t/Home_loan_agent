@@ -10,13 +10,13 @@ import {
 
 // Firebase project config
 const firebaseConfig = {
-  apiKey: "AIzaSyCpHRWOXdN7YNmzdyJoBQaxPNXdfem9Wjg",
-  authDomain: "home-loan-49875.firebaseapp.com",
-  projectId: "home-loan-49875",
-  storageBucket: "home-loan-49875.firebasestorage.app",
-  messagingSenderId: "150763436734",
-  appId: "1:150763436734:web:c1e21b7b43e65cf76b3cef",
-  measurementId: "G-8RS6Q832Q0",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 const app = initializeApp(firebaseConfig);

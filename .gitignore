@@ -1,0 +1,28 @@
+# Environment & Secrets
+.env
+*.env.local
+
+# Project Specific
+saved_docs/
+app/static/config.py
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Node / React
+node_modules/
+app/frontend/react-frontend/dist/
+app/frontend/react-frontend/dist-ssr/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
