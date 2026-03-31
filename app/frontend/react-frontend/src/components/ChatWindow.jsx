@@ -12,7 +12,7 @@ function extractInterruptText(payload) {
    Key insight: receives a stable `groupId` so React never
    unmounts/remounts it when new messages arrive.
 ───────────────────────────────────────────────────────── */
-function ActivityLog({ events, groupId }) {
+function ActivityLog({ events }) {
   // Open state MUST be stored at this level and must survive
   // parent re-renders.  We key by `groupId` (stable) not by
   // random value, so React reuses this component instance.
@@ -23,7 +23,7 @@ function ActivityLog({ events, groupId }) {
   const cleanText = (t) =>
     String(t)
       .replace(/^\[.*?\]\s*/i, "")   // strip [tag] prefixes
-      .replace(/^[\u2699\ufe0f\u2705\u26a0\ufe0f\u23f8\ufe0f]\s*/u, "") // strip leading emoji
+      .replace(/^(?:⚙️|✅|⚠️|⏸️)\s*/u, "") // strip leading emoji
       .trim();
 
   return (
@@ -184,7 +184,6 @@ export default function ChatWindow({ messages, isProcessing, isWaiting, interrup
             return (
               <ActivityLog
                 key={group.id}        // stable → no unmount/remount
-                groupId={group.id}
                 events={group.texts}
               />
             );

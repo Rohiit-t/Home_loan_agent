@@ -332,6 +332,34 @@ html,body,#root { height: 100%; font-family: var(--font); background: var(--bg-d
   gap: 10px;
 }
 
+.top-bar-user {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.76rem;
+  color: var(--text-2);
+}
+
+.top-bar-signout-btn {
+  padding: 6px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: var(--font);
+  color: var(--text-2);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+
+.top-bar-signout-btn:hover {
+  color: var(--red);
+  border-color: rgba(248,113,113,0.3);
+  background: rgba(248,113,113,0.08);
+}
+
 .processing-badge {
   font-size: 0.72rem;
   font-weight: 600;
@@ -710,6 +738,36 @@ html,body,#root { height: 100%; font-family: var(--font); background: var(--bg-d
   animation: blink 1.2s infinite;
 }
 
+.quick-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.quick-option-btn {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-2);
+  border-radius: var(--r-full);
+  padding: 7px 12px;
+  font-family: var(--font);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+
+.quick-option-btn:hover:not(:disabled) {
+  color: var(--accent-light);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.quick-option-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* Attachment pill */
 .attachment-pill {
   display: inline-flex;
@@ -866,24 +924,13 @@ html,body,#root { height: 100%; font-family: var(--font); background: var(--bg-d
   transform: translateY(0);
 }
 
-/* 3D Canvas background */
-.hero-3d-canvas {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: auto;
-}
-
-.hero-3d-canvas canvas {
-  display: block;
-}
-
 /* Nav */
 .landing-nav {
   position: relative;
   z-index: 2;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 22px 52px;
 }
 
@@ -1347,4 +1394,372 @@ html,body,#root { height: 100%; font-family: var(--font); background: var(--bg-d
   .steps-track { flex-direction: column; align-items: center; }
   .landing-nav { padding: 16px 20px; }
   .hero { padding: 50px 20px 40px; }
+}
+
+/* ================================================================
+   Sign-In Page
+   ================================================================ */
+.signin-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-deep);
+  background-image:
+    radial-gradient(ellipse at 30% 20%, rgba(99,102,241,0.12) 0%, transparent 60%),
+    radial-gradient(ellipse at 70% 80%, rgba(52,211,153,0.08) 0%, transparent 60%);
+}
+
+.signin-card {
+  text-align: center;
+  padding: 48px 40px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  max-width: 380px;
+  width: 90%;
+  animation: fade-up 0.5s var(--ease) both;
+}
+
+.signin-logo {
+  font-size: 3rem;
+  margin-bottom: 12px;
+}
+
+.signin-title {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--text-1);
+  margin-bottom: 4px;
+}
+
+.signin-accent {
+  background: linear-gradient(135deg, var(--accent-light), var(--green));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.signin-subtitle {
+  font-size: 0.88rem;
+  color: var(--text-3);
+  margin-bottom: 28px;
+}
+
+.signin-google-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 24px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: var(--font);
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
+  border: none;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  box-shadow: 0 4px 20px var(--accent-glow);
+  transition: all var(--dur) var(--ease);
+}
+
+.signin-google-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 28px var(--accent-glow);
+}
+
+.signin-google-btn:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: 0 2px 10px rgba(99,102,241,0.25);
+}
+
+.signin-google-icon {
+  flex-shrink: 0;
+}
+
+.signin-error {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--red);
+}
+
+.signin-hint {
+  font-size: 0.75rem;
+  color: var(--text-4);
+  margin-top: 16px;
+}
+
+/* ================================================================
+   Landing Nav — User Section
+   ================================================================ */
+.landing-nav-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nav-user-email {
+  font-size: 0.82rem;
+  color: var(--text-2);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-signout-btn {
+  padding: 6px 16px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: var(--font);
+  color: var(--text-2);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+
+.nav-signout-btn:hover {
+  color: var(--red);
+  border-color: rgba(248,113,113,0.3);
+  background: rgba(248,113,113,0.08);
+}
+
+/* ================================================================
+   Phone Verification Page
+   ================================================================ */
+.phone-verify-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-deep);
+  padding: 24px;
+}
+
+.phone-verify-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-xl);
+  padding: 44px 36px 36px;
+  text-align: center;
+  box-shadow: var(--shadow), 0 0 60px rgba(99,102,241,0.06);
+  animation: fade-up 0.45s var(--ease) both;
+}
+
+.phone-verify-logo {
+  font-size: 2.8rem;
+  margin-bottom: 12px;
+  animation: float-gentle 3s ease-in-out infinite;
+}
+
+@keyframes float-gentle {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+.phone-verify-title {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-1);
+  margin-bottom: 6px;
+}
+
+.phone-verify-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  margin-bottom: 24px;
+  line-height: 1.6;
+}
+
+.phone-verify-email {
+  color: var(--accent-light);
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+/* ── Form ──────────────────────────────────────────── */
+.phone-verify-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.phone-verify-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+  letter-spacing: 0.3px;
+}
+
+.phone-verify-input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 1rem;
+  font-family: var(--font);
+  color: var(--text-1);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  outline: none;
+  transition: all var(--dur) var(--ease);
+}
+
+.phone-verify-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.phone-verify-input::placeholder {
+  color: var(--text-4);
+}
+
+.otp-input {
+  text-align: center;
+  letter-spacing: 10px;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+/* ── Buttons ───────────────────────────────────────── */
+.phone-verify-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 13px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: var(--font);
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
+  border: none;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  box-shadow: 0 4px 16px var(--accent-glow);
+  min-height: 48px;
+}
+
+.phone-verify-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px var(--accent-glow);
+}
+
+.phone-verify-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.phone-verify-link-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  font-family: var(--font);
+  cursor: pointer;
+  padding: 6px 0;
+  transition: color var(--dur) var(--ease);
+}
+
+.phone-verify-link-btn:hover {
+  color: var(--accent-light);
+}
+
+/* ── Spinner ───────────────────────────────────────── */
+.phone-verify-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2.5px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Error / Success messages ──────────────────────── */
+.phone-verify-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: rgba(248,113,113,0.08);
+  border: 1px solid rgba(248,113,113,0.2);
+  color: var(--red);
+  font-size: 0.82rem;
+  text-align: left;
+  margin-bottom: 8px;
+  animation: fade-up 0.25s var(--ease) both;
+}
+
+.phone-verify-error-icon { flex-shrink: 0; }
+
+.phone-verify-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: rgba(52,211,153,0.08);
+  border: 1px solid rgba(52,211,153,0.2);
+  color: var(--green);
+  font-size: 0.82rem;
+  text-align: left;
+  margin-bottom: 8px;
+  animation: fade-up 0.25s var(--ease) both;
+}
+
+.phone-verify-success-icon { flex-shrink: 0; }
+
+/* ── Success done state ────────────────────────────── */
+.phone-verify-done {
+  padding: 24px 0;
+  animation: fade-up 0.4s var(--ease) both;
+}
+
+.phone-verify-done-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+  animation: float-gentle 2s ease-in-out infinite;
+}
+
+.phone-verify-done p {
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
+/* ── Sign-out link ─────────────────────────────────── */
+.phone-verify-signout {
+  display: inline-block;
+  margin-top: 24px;
+  background: none;
+  border: none;
+  color: var(--text-4);
+  font-size: 0.75rem;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+
+.phone-verify-signout:hover {
+  color: var(--red);
+  text-decoration: underline;
 }

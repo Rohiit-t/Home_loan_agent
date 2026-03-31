@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import HeroScene3D from "./HeroScene3D";
+import { useAuth } from "../context/AuthContext.jsx";
 
 const FEATURES = [
   {
@@ -32,6 +32,7 @@ const STEPS = [
 ];
 
 export default function LandingPage({ onStart }) {
+  const { user, signOut } = useAuth();
   const [visible, setVisible] = useState(false);
   const [activeFeature, setActiveFeature] = useState(0);
 
@@ -48,15 +49,18 @@ export default function LandingPage({ onStart }) {
 
   return (
     <div className={`landing ${visible ? "landing--visible" : ""}`}>
-      {/* 3D animated background */}
-      <HeroScene3D />
-
       {/* Navigation */}
       <nav className="landing-nav">
         <div className="landing-nav-brand">
           <span className="nav-logo">🏠</span>
           <span className="nav-title">HomeLoan<span className="nav-accent">AI</span></span>
         </div>
+        {user && (
+          <div className="landing-nav-user">
+            <span className="nav-user-email">{user.displayName || user.email}</span>
+            <button className="nav-signout-btn" onClick={signOut}>Sign Out</button>
+          </div>
+        )}
       </nav>
 
       {/* Hero Section */}

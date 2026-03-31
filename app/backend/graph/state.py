@@ -29,6 +29,12 @@ class ApplicationState(TypedDict):
     personal_info: dict
     financial_info: dict
     employment_info: dict
+    employment_status_collected: bool
+    employment_retry_count: int
+    existing_emi_collected: bool
+    existing_emi_retry_count: int
+    existing_loan_details_collected: bool
+    existing_loan_details_retry_count: int
     
     all_loan_details_provided: bool
     missing_loan_details: List[str]

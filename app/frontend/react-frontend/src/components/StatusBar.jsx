@@ -1,18 +1,32 @@
 const STAGES = [
   { id: "awaiting_documents", label: "Documents", icon: "📄" },
+  { id: "employment_status_collection", label: "Employment", icon: "🧾" },
   { id: "loan_details_collection", label: "Loan Details", icon: "💰" },
+  { id: "existing_emi_collection", label: "Existing EMI", icon: "🏦" },
   { id: "financial_risk_check", label: "Risk Check", icon: "📊" },
   { id: "saving_data", label: "Complete", icon: "✅" },
 ];
 
+const STAGE_ALIAS = {
+  awaiting_employment_status: "employment_status_collection",
+  awaiting_loan_details: "loan_details_collection",
+  awaiting_existing_emi_choice: "existing_emi_collection",
+  awaiting_existing_emi_details: "existing_emi_collection",
+  emi_calculation: "saving_data",
+};
+
 function StageTracker({ currentStage }) {
-  const activeIndex = STAGES.findIndex((s) => s.id === currentStage);
+  const normalizedStage = STAGE_ALIAS[currentStage] || currentStage;
+  const isCompleted = normalizedStage === "completed";
+  const activeIndex = isCompleted
+    ? STAGES.length
+    : STAGES.findIndex((s) => s.id === normalizedStage);
 
   return (
     <div className="stage-tracker">
       {STAGES.map((stage, i) => {
-        const isDone = i < activeIndex;
-        const isActive = i === activeIndex;
+        const isDone = isCompleted || i < activeIndex;
+        const isActive = !isCompleted && i === activeIndex;
         return (
           <div key={stage.id} className="stage-item">
             <div className={`stage-dot ${isDone ? "stage-dot--done" : isActive ? "stage-dot--active" : ""}`}>

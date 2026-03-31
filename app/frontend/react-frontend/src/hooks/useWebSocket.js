@@ -32,18 +32,20 @@ function isHiddenInternal(text) {
   return text.trim().toLowerCase().startsWith("intent:");
 }
 
-const WELCOME = "Welcome! Please share your email address to continue your home loan application.";
+const WELCOME = "Welcome! I'm your Home Loan Assistant.\nAsk anything about home loan or start the application by sharing Documents - Aadhar Card , Pan Card , ITR  ";
 
-export default function useWebSocket() {
+export default function useWebSocket(userEmail = "") {
   const [messages, setMessages] = useState([{ id: nextId(), kind: "bot", text: WELCOME }]);
   const [status, setStatus] = useState("disconnected");
   const [isWaiting, setIsWaiting] = useState(false);
   const [interruptPayload, setInterruptPayload] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentStage, setCurrentStage] = useState(null);
+  const [userId, setUserId] = useState(() => createReadableUserId());
+  const [threadId, setThreadId] = useState(() => `loan-chat-${crypto.randomUUID()}`);
 
-  const userIdRef        = useRef(createReadableUserId());
-  const threadIdRef      = useRef(`loan-chat-${crypto.randomUUID()}`);
+  const userIdRef        = useRef(userId);
+  const threadIdRef      = useRef(threadId);
   const wsRef            = useRef(null);
   const mountedRef       = useRef(true);
   const reconnectTimer   = useRef(null);
@@ -126,6 +128,7 @@ export default function useWebSocket() {
       }
 
     } else if (event === "interrupt") {
+      if (data?.stage) setCurrentStage(data.stage);
       setIsWaiting(true);
       setInterruptPayload(data);
       setIsProcessing(false);
@@ -206,7 +209,7 @@ export default function useWebSocket() {
         wsRef.current.close();
       }
     };
-  }, []);
+  }, [connect]);
 
   /* ─── send a message ───────────────────────────────────── */
   const sendMessage = useCallback(({ text = "", jsonDocument = null, isResume = false } = {}) => {
@@ -219,6 +222,7 @@ export default function useWebSocket() {
     const payload = {
       thread_id: threadIdRef.current,
       user_id: userIdRef.current,
+      email: userEmail || "",
     };
     let normalized;
     if (jsonDocument) {
@@ -248,13 +252,17 @@ export default function useWebSocket() {
       addMessage({ kind: "error", text: `Send failed: ${err.message}` });
       setIsProcessing(false);
     }
-  }, [addMessage, resetTurnDedup]);
+  }, [addMessage, resetTurnDedup, userEmail]);
 
   /* ─── new chat ─────────────────────────────────────────── */
   const resetChat = useCallback(() => {
     isResettingRef.current = true;
-    userIdRef.current = createReadableUserId();
-    threadIdRef.current = `loan-chat-${crypto.randomUUID()}`;
+    const nextUserId = createReadableUserId();
+    const nextThreadId = `loan-chat-${crypto.randomUUID()}`;
+    userIdRef.current = nextUserId;
+    threadIdRef.current = nextThreadId;
+    setUserId(nextUserId);
+    setThreadId(nextThreadId);
     resetTurnDedup();
     setMessages([{ id: nextId(), kind: "bot", text: WELCOME }]);
     setIsWaiting(false);
@@ -267,8 +275,8 @@ export default function useWebSocket() {
   return {
     messages, status, isWaiting, interruptPayload,
     isProcessing, currentStage,
-    userId: userIdRef.current,
-    threadId: threadIdRef.current,
+    userId,
+    threadId,
     sendMessage, resetChat,
   };
 }

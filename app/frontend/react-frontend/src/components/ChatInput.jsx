@@ -1,13 +1,30 @@
 import { useState, useRef } from "react";
 
-export default function ChatInput({ onSend, isProcessing, isWaiting }) {
+export default function ChatInput({ onSend, isProcessing, isWaiting, interruptPayload }) {
   const [text, setText] = useState("");
   const [attachedFile, setAttachedFile] = useState(null);
   const [attachedJson, setAttachedJson] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  const placeholder = isWaiting ? "Reply to continue..." : "Ask something or share your details...";
+  const interruptType = String(interruptPayload?.type || "").trim().toLowerCase();
+  const isEmploymentPrompt = isWaiting && interruptType === "employment_status";
+  const isExistingEmiChoicePrompt = isWaiting && interruptType === "existing_emi_choice";
+  const showQuickOptions = isEmploymentPrompt || isExistingEmiChoicePrompt;
+
+  const quickOptions = Array.isArray(interruptPayload?.options) && interruptPayload.options.length
+    ? interruptPayload.options
+    : isEmploymentPrompt
+      ? ["Employed", "Self-employed/Business", "Unemployed"]
+      : ["Yes", "No"];
+
+  const placeholder = isEmploymentPrompt
+    ? "Choose an option below or type your employment status..."
+    : isExistingEmiChoicePrompt
+      ? "Choose Yes or No, or type your response..."
+    : isWaiting
+      ? "Reply to continue..."
+      : "Ask something or share your details...";
   const canSend = !isProcessing && (text.trim() || attachedJson);
 
   function parseFile(file) {
@@ -60,6 +77,14 @@ export default function ChatInput({ onSend, isProcessing, isWaiting }) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
   }
 
+  function handleQuickOption(option) {
+    if (isProcessing) return;
+    onSend({ text: String(option || "").trim(), jsonDocument: null, isResume: true });
+    setText("");
+    setAttachedFile(null);
+    setAttachedJson(null);
+  }
+
   return (
     <div
       className={`input-zone ${dragOver ? "input-zone--drag" : ""}`}
@@ -86,6 +111,22 @@ export default function ChatInput({ onSend, isProcessing, isWaiting }) {
         <div className="input-zone-banner">
           <span className="input-zone-banner-dot" />
           Waiting for your reply to continue the application
+        </div>
+      )}
+
+      {showQuickOptions && (
+        <div className="quick-options">
+          {quickOptions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              className="quick-option-btn"
+              onClick={() => handleQuickOption(option)}
+              disabled={isProcessing}
+            >
+              {option}
+            </button>
+          ))}
         </div>
       )}
 

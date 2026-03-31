@@ -100,6 +100,48 @@ class LoanDetails(BaseModel):
         extra = "forbid"
 
 
+class EmploymentStatusChoice(BaseModel):
+    """Schema for employment status classification."""
+    employment_status: Literal["employed", "self_employed", "unemployed", "unknown"] = Field(
+        description=(
+            "Canonical employment status. Use 'employed', 'self_employed', "
+            "'unemployed', or 'unknown'."
+        )
+    )
+    
+    class Config:
+        extra = "forbid"
+
+
+class ExistingEmiChoice(BaseModel):
+    """Schema for existing EMI availability classification."""
+    has_existing_emi: Literal["yes", "no", "unknown"] = Field(
+        description="Whether user has existing EMI obligations."
+    )
+
+    class Config:
+        extra = "forbid"
+
+
+class ExistingEmiDetails(BaseModel):
+    """Schema for existing EMI details extraction."""
+    monthly_emi: Optional[float] = Field(
+        None,
+        description="Monthly EMI amount in rupees for existing loan obligation."
+    )
+    loan_amount: Optional[float] = Field(
+        None,
+        description="Original existing loan amount in rupees."
+    )
+    tenure_months: Optional[int] = Field(
+        None,
+        description="Remaining tenure for existing loan in months."
+    )
+
+    class Config:
+        extra = "forbid"
+
+
 class HomeLoanAgent:
     """
     Unified Agent class for Home Loan Application processing.
@@ -145,6 +187,30 @@ class HomeLoanAgent:
 
         messages = state.get("messages", [])
         return self._latest_user_query(messages)
+
+    def _normalize_employment_status(self, value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+
+        if "unemploy" in normalized:
+            return "unemployed"
+
+        if (
+            "self" in normalized
+            or "business" in normalized
+            or "entrepreneur" in normalized
+            or "freelanc" in normalized
+        ):
+            return "self_employed"
+
+        if "employ" in normalized or "salaried" in normalized or "salary" in normalized or "job" in normalized:
+            return "employed"
+
+        return None
     
     
     def intent_classifier(self, state: ApplicationState) -> Dict[str, Any]:
@@ -184,8 +250,8 @@ class HomeLoanAgent:
         Your task:
         Given the user's message, classify it into exactly one of the following categories:
         - 'Document_upload': if the user mentions uploading a document like PAN, Aadhaar, Salary slip, etc.
-                - 'Text_info': if the user provides information like personal, financial, or employment details in text.
-                    IMPORTANT: if the message contains an email address, classify as 'Text_info'.
+        - 'Text_info': if the user provides information like personal details (e.g. name), financial, or employment details in text.
+            IMPORTANT: if the message contains an email address, a person's name (such as "User One", "John", etc.), or other personal details, classify as 'Text_info'.
         - 'Homeloan_query': if the user asks questions about home loans, interest rates, eligibility, etc.
         - 'Irrelevant': if the user asks something completely unrelated to home loans or the application process.
 
@@ -281,8 +347,14 @@ class HomeLoanAgent:
         system_prompt = """
         You are a helpful Home Loan Application assistant.
         The user is asking a general question about home loans (interest rates, eligibility, process, etc.).
-        Answer their question concisely and accurately. At the end of your answer, ask if they would like to 
-        start or continue their home loan application by providing their details or documents. Answer shortly and precisely in about 2-3 sentences. Always encourage them to proceed with the application process after answering their query.
+        the interest rate we are considering for our process is 8.5% .
+        Important information about our specific home loan process to use in your answers:
+        - Required Documents: Aadhaar Card, PAN Card, and ITR (Income Tax Return).
+        - Eligible Employment Status: Employed or Self-employed/Business (Unemployed applicants are currently not processed).
+        - Next steps: After documents, we collect employment status, loan details (amount, down payment, tenure), and existing EMI information to calculate financial eligibility.
+        
+        Answer their question concisely and accurately based on our process if applicable. At the end of your answer, ask if they would like to 
+        start or continue their home loan application by providing their details or documents. Answer shortly and precisely in about 3-4 sentences. Always encourage them to proceed with the application process after answering their query.
         """
         
         prompt = ChatPromptTemplate.from_messages([
@@ -366,14 +438,8 @@ class HomeLoanAgent:
                     "doc_retry_count": doc_retry_count,
                 }
         else:
-            # Reset consecutive retry counter on meaningful document progress.
             doc_retry_count = 0
         
-        # IMPORTANT: Do NOT return dict(subgraph_updates) directly.
-        # The subgraph returns the FULL accumulated state (including ALL
-        # messages from previous turns) because `messages` uses the
-        # add_messages reducer.  We must cherry-pick only the keys that
-        # carry genuinely new information and build a single fresh message.
         _SUBGRAPH_KEYS = {
             "uploaded_documents", "personal_info", "financial_info",
             "employment_info", "current_processing_doc", "uploaded_docs",
@@ -386,9 +452,6 @@ class HomeLoanAgent:
         }
         result["current_stage"] = "state_evaluation"
 
-        # Build a single NEW message summarising what the subgraph did.
-        # The subgraph's last node always adds exactly one AIMessage; grab
-        # only THAT text so we don't replay old messages.
         subgraph_msgs = subgraph_updates.get("messages", [])
         last_ai_text = None
         for m in reversed(subgraph_msgs):
@@ -429,7 +492,7 @@ class HomeLoanAgent:
         system_prompt = """
         You are an information extraction assistant for a Home Loan Application.
         Extract relevant personal, financial, and employment information from the user's message.
-        Personal information includes email address if provided.
+        Personal information includes the person's name (like "User One", "John", etc.), age, and email address if provided.
         Map them strictly to the given structured output format.
         If a piece of information is not present, omit it or leave it null.
         """
@@ -481,8 +544,14 @@ class HomeLoanAgent:
 
         writer({"type": "status", "node": "text_info_extractor", "msg": "✅ Info captured"})
 
-        if personal_info.get("email"):
-            msg = AIMessage(content="I have noted this information, including your email address.")
+        extracted_items = []
+        if result.personal_info and result.personal_info.name:
+            extracted_items.append("name")
+        if (result.personal_info and result.personal_info.email) or regex_email_match:
+            extracted_items.append("email address")
+
+        if extracted_items:
+            msg = AIMessage(content=f"I have noted this information, including your {' and '.join(extracted_items)}.")
         else:
             msg = AIMessage(content="I have noted this information.")
 
@@ -499,7 +568,8 @@ class HomeLoanAgent:
         Node 6: State Evaluator
         
         Evaluates if all mandatory documents are uploaded.
-        Routes to interrupt_handler if docs missing, or loan_details if all docs present.
+        Routes to interrupt_handler if docs missing, or employment status
+        collection if all docs are present.
         
         Args:
             state: Current application state
@@ -510,10 +580,10 @@ class HomeLoanAgent:
         writer = get_stream_writer()
         writer({"type": "status", "node": "state_evaluator", "msg": "📋 Checking document status..."})
 
-        if state.get("current_stage") == "failed_max_retries":
+        if str(state.get("current_stage") or "").startswith("failed"):
             return {
                 "all_documents_uploaded": False,
-                "current_stage": "failed_max_retries",
+                "current_stage": state.get("current_stage") or "failed_max_retries",
             }
 
         uploaded_docs = state.get("uploaded_documents", {})
@@ -543,8 +613,11 @@ class HomeLoanAgent:
         
         msg = (
             " All required documents uploaded successfully!\n\n"
-            " Next step: Loan Details\n"
-            "We now need to collect your loan requirements (amount, down payment, tenure)."
+            " Next step: Employment Status\n"
+            "Please tell your employment status to continue:\n"
+                "1) Employed\n"
+                "2) Self-employed / Business\n"
+                "3) Unemployed"
         )
         
         writer({"type": "status", "node": "state_evaluator", "msg": "✅ Documents complete"})
@@ -554,8 +627,164 @@ class HomeLoanAgent:
             "intent": None,
             "paused_reason": None,
             "all_documents_uploaded": True,
-            "current_stage": "loan_details_collection",
+            "employment_status_collected": False,
+            "current_stage": "employment_status_collection",
             "doc_retry_count": 0,
+        }
+
+    def employment_status_collector(self, state: ApplicationState) -> Dict[str, Any]:
+        """
+        Node 6.7: Employment Status Collector (interrupt + structured LLM)
+
+        Collects employment status via interrupt, extracts canonical value with LLM,
+        and gates the workflow:
+        - unemployed -> fail and end workflow
+        - employed/self-employed -> proceed to loan details
+        """
+        writer = get_stream_writer()
+        writer({"type": "status", "node": "employment_status_collector", "msg": "🧾 Collecting employment status..."})
+
+        if str(state.get("current_stage") or "").startswith("failed"):
+            return {
+                "employment_status_collected": False,
+                "current_stage": state.get("current_stage") or "failed_max_retries",
+            }
+
+        employment_info = dict(state.get("employment_info", {}) or {})
+        retry_count = int(state.get("employment_retry_count", 0) or 0)
+        max_retry_count = 3
+
+        status = self._normalize_employment_status(
+            employment_info.get("employment_status") or employment_info.get("employment_type")
+        )
+
+        if not status:
+            prompt_payload = {
+                "type": "employment_status",
+                "stage": "awaiting_employment_status",
+                "message": (
+                    "Please tell your employment status to continue:\n"
+                    "1) Employed\n"
+                    "2) Self-employed / Business\n"
+                    "3) Unemployed"
+                ),
+                "options": [
+                    "Employed",
+                    "Self-employed/Business",
+                    "Unemployed",
+                ],
+            }
+
+            writer({"type": "status", "node": "employment_status_collector", "msg": "⏸ Waiting for employment status"})
+            user_reply = interrupt(prompt_payload)
+
+            query_text = ""
+            if isinstance(user_reply, dict):
+                query_text = str(user_reply.get("user_query") or user_reply.get("message") or "").strip()
+            else:
+                query_text = str(user_reply or "").strip()
+
+            extracted_status = "unknown"
+            if query_text:
+                system_prompt = """
+                You are an employment status extraction assistant for home loan processing.
+
+                Classify the user's response into exactly one canonical value:
+                - employed
+                - self_employed
+                - unemployed
+                - unknown
+
+                Notes:
+                - 'self_employed' includes business owner, entrepreneur, freelancer, consultant, professional practice.
+                - If unclear, return 'unknown'.
+                """
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    ("user", "{query}"),
+                ])
+
+                llm = get_structured_model()
+                structured_llm = llm.with_structured_output(EmploymentStatusChoice)
+                result = (prompt | structured_llm).invoke({"query": query_text})
+                extracted_status = result.employment_status
+
+            status = self._normalize_employment_status(extracted_status)
+
+            if not status:
+                retry_count += 1
+                attempts_left = max_retry_count - retry_count
+
+                if retry_count >= max_retry_count:
+                    fail_msg = (
+                        "❌ Unsuccessful process: maximum retry attempts reached.\n\n"
+                        "We could not capture a valid employment status after multiple attempts. "
+                        "Please start a new application."
+                    )
+                    writer({"type": "warning", "node": "employment_status_collector", "msg": "❌ Maximum retries reached"})
+                    return {
+                        "messages": [AIMessage(content=fail_msg)],
+                        "paused_reason": "Maximum retries reached in employment status collection.",
+                        "employment_info": employment_info,
+                        "employment_status_collected": False,
+                        "current_stage": "failed_max_retries",
+                        "employment_retry_count": retry_count,
+                    }
+
+                retry_msg = (
+                    "I couldn't identify your employment status from your last response.\n"
+                    "Please reply with one of these options: Employed, Self-employed/Business, or Unemployed.\n"
+                    f"Retry {retry_count}/{max_retry_count}. Attempts left: {attempts_left}."
+                )
+                return {
+                    "messages": [AIMessage(content=retry_msg)],
+                    "paused_reason": "Waiting for valid employment status input.",
+                    "employment_info": employment_info,
+                    "employment_status_collected": False,
+                    "current_stage": "awaiting_employment_status",
+                    "employment_retry_count": retry_count,
+                }
+
+        employment_info["employment_status"] = status
+
+        if status == "self_employed":
+            employment_info["employment_type"] = "Self-employed"
+        elif status == "employed":
+            employment_info["employment_type"] = "Salaried"
+
+        if status == "unemployed":
+            writer({"type": "warning", "node": "employment_status_collector", "msg": "❌ Unemployed applicants are not processed"})
+            fail_msg = (
+                "❌ We currently do not process home loan applications for unemployed applicants "
+                "as per current bank rules.\n\n"
+                "Please apply again once your employment status changes."
+            )
+            return {
+                "messages": [AIMessage(content=fail_msg)],
+                "paused_reason": "Application closed due to unemployed status.",
+                "employment_info": employment_info,
+                "employment_status_collected": False,
+                "current_stage": "failed_unemployed",
+                "employment_retry_count": 0,
+            }
+
+        status_label = "Self-employed/Business" if status == "self_employed" else "Employed"
+        success_msg = (
+            f"✅ Employment status recorded: {status_label}.\n\n"
+            "📋 Loan details needed to proceed.\n"
+            "Please share Home Loan Amount (e.g., 50 lakhs), Down Payment, and Tenure (years)."
+        )
+
+        writer({"type": "status", "node": "employment_status_collector", "msg": "✅ Employment status captured"})
+
+        return {
+            "messages": [AIMessage(content=success_msg)],
+            "paused_reason": None,
+            "employment_info": employment_info,
+            "employment_status_collected": True,
+            "current_stage": "loan_details_collection",
+            "employment_retry_count": 0,
         }
     
     def interrupt_handler(self, state: ApplicationState) -> ApplicationState:
@@ -764,7 +993,8 @@ class HomeLoanAgent:
             f"  • Home Loan Amount: ₹{financial_info['home_loan_amount']:,.2f}\n"
             f"  • Down Payment: ₹{financial_info['down_payment']:,.2f}\n"
             f"  • Loan Tenure: {financial_info['tenure_years']} years\n\n"
-            "Proceeding to financial risk assessment..."
+            "Proceeding to existing EMI check...\n" 
+            "Do you have any existing EMIs? Please select Yes or No."
         )
 
         writer({"type": "status", "node": "loan_details_checker", "msg": "✅ Loan details captured"})
@@ -773,9 +1003,356 @@ class HomeLoanAgent:
             "messages": [AIMessage(content=success_msg)],
             "paused_reason": None,
             "all_loan_details_provided": True,
-            "current_stage": "financial_risk_check",
+            "current_stage": "existing_emi_collection",
             "financial_info": financial_info,
             "retry_count": 0,
+        }
+
+    def existing_emi_collector(self, state: ApplicationState) -> Dict[str, Any]:
+        """
+        Node 7.5: Existing EMI Choice Collector (interrupt-driven)
+
+        Flow:
+        1. Ask whether user has any existing EMIs (Yes/No).
+        2. If No -> store 0 existing EMI and move to financial risk.
+        3. If Yes -> route to existing loan details collector node.
+        """
+        writer = get_stream_writer()
+        writer({"type": "status", "node": "existing_emi_collector", "msg": "🏦 Checking if you have existing EMIs..."})
+
+        if str(state.get("current_stage") or "").startswith("failed"):
+            return {
+                "existing_emi_collected": False,
+                "current_stage": state.get("current_stage") or "failed_max_retries",
+            }
+
+        financial_info = dict(state.get("financial_info", {}) or {})
+        retry_count = int(state.get("existing_emi_retry_count", 0) or 0)
+        max_retry_count = 3
+
+        def _extract_text(payload: Any) -> str:
+            if isinstance(payload, dict):
+                return str(payload.get("user_query") or payload.get("message") or "").strip()
+            return str(payload or "").strip()
+
+        def _as_positive_float(value: Any) -> Optional[float]:
+            try:
+                number = float(value)
+                return number if number > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        def _as_positive_int(value: Any) -> Optional[int]:
+            try:
+                number = int(value)
+                return number if number > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        has_existing_emi = financial_info.get("has_existing_emi")
+        if not isinstance(has_existing_emi, bool):
+            prompt_payload = {
+                "type": "existing_emi_choice",
+                "stage": "awaiting_existing_emi_choice",
+                "message": "Do you have any existing EMIs? Please select Yes or No.",
+                "options": ["Yes", "No"],
+            }
+
+            writer({"type": "status", "node": "existing_emi_collector", "msg": "⏸ Waiting for existing EMI choice"})
+            user_reply = interrupt(prompt_payload)
+            query_text = _extract_text(user_reply)
+
+            choice = "unknown"
+            if query_text:
+                system_prompt = """
+                You are an intent extractor for loan applications.
+                Classify user response into exactly one value:
+                - yes
+                - no
+                - unknown
+
+                Rules:
+                - Positive confirmation (yes, haan, sure, I have EMI) => yes
+                - Negative confirmation (no, none, don't have) => no
+                - Anything ambiguous => unknown
+                """
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    ("user", "{query}"),
+                ])
+
+                llm = get_structured_model()
+                structured_llm = llm.with_structured_output(ExistingEmiChoice)
+                result = (prompt | structured_llm).invoke({"query": query_text})
+                choice = result.has_existing_emi
+
+            if choice == "unknown":
+                retry_count += 1
+                attempts_left = max_retry_count - retry_count
+
+                if retry_count >= max_retry_count:
+                    fail_msg = (
+                        "❌ Unsuccessful process: maximum retry attempts reached.\n\n"
+                        "We could not capture whether you have existing EMIs. "
+                        "Please start a new application."
+                    )
+                    writer({"type": "warning", "node": "existing_emi_collector", "msg": "❌ Maximum retries reached"})
+                    return {
+                        "messages": [AIMessage(content=fail_msg)],
+                        "paused_reason": "Maximum retries reached while asking existing EMI choice.",
+                        "financial_info": financial_info,
+                        "existing_emi_collected": False,
+                        "current_stage": "failed_max_retries",
+                        "existing_emi_retry_count": retry_count,
+                    }
+
+                retry_msg = (
+                    "I couldn't identify your response.\n"
+                    "Please reply only with Yes or No for existing EMIs.\n"
+                    f"Retry {retry_count}/{max_retry_count}. Attempts left: {attempts_left}."
+                )
+                return {
+                    "messages": [AIMessage(content=retry_msg)],
+                    "paused_reason": "Waiting for valid existing EMI Yes/No response.",
+                    "financial_info": financial_info,
+                    "existing_emi_collected": False,
+                    "current_stage": "awaiting_existing_emi_choice",
+                    "existing_emi_retry_count": retry_count,
+                }
+
+            has_existing_emi = choice == "yes"
+            financial_info["has_existing_emi"] = has_existing_emi
+
+        if not has_existing_emi:
+            financial_info["total_existing_emis"] = 0.0
+            financial_info.pop("existing_emi_loan_amount", None)
+            financial_info.pop("existing_emi_tenure_months", None)
+            financial_info.pop("existing_emi_time_period_months", None)
+
+            msg = (
+                "✅ Noted. You do not have any existing EMIs.\n\n"
+                "Proceeding to EMI calculations..."
+            )
+            writer({"type": "status", "node": "existing_emi_collector", "msg": "✅ No existing EMI declared"})
+            return {
+                "messages": [AIMessage(content=msg)],
+                "paused_reason": None,
+                "financial_info": financial_info,
+                "existing_emi_collected": True,
+                "existing_loan_details_collected": False,
+                "existing_loan_details_retry_count": 0,
+                "current_stage": "emi_calculation",
+                "existing_emi_retry_count": 0,
+            }
+
+        msg = (
+            "✅ Noted. You have existing EMI obligations.\n\n"
+            "Please share your existing EMI loan details:\n"
+            "1) Monthly EMI amount\n"
+            "2) Existing loan amount\n"
+            "3) Remaining tenure (months or years)"
+        )
+
+        writer({"type": "status", "node": "existing_emi_collector", "msg": "✅ Existing EMI declared"})
+
+        return {
+            "messages": [AIMessage(content=msg)],
+            "paused_reason": None,
+            "financial_info": financial_info,
+            "existing_emi_collected": True,
+            "existing_loan_details_collected": False,
+            "existing_loan_details_retry_count": 0,
+            "current_stage": "existing_emi_collection",
+            "existing_emi_retry_count": 0,
+        }
+
+    def existing_loan_details_collector(self, state: ApplicationState) -> Dict[str, Any]:
+        """
+        Node 7.6: Existing Loan Details Collector (interrupt-driven)
+
+        Collects details for existing EMI obligations:
+        - Monthly EMI
+        - Existing loan amount
+        - Remaining tenure
+        """
+        writer = get_stream_writer()
+        writer({"type": "status", "node": "existing_loan_details_collector", "msg": "📋 Collecting existing loan details..."})
+
+        if str(state.get("current_stage") or "").startswith("failed"):
+            return {
+                "existing_loan_details_collected": False,
+                "current_stage": state.get("current_stage") or "failed_max_retries",
+            }
+
+        financial_info = dict(state.get("financial_info", {}) or {})
+        retry_count = int(state.get("existing_loan_details_retry_count", 0) or 0)
+        max_retry_count = 3
+
+        def _extract_text(payload: Any) -> str:
+            if isinstance(payload, dict):
+                return str(payload.get("user_query") or payload.get("message") or "").strip()
+            return str(payload or "").strip()
+
+        def _as_positive_float(value: Any) -> Optional[float]:
+            try:
+                number = float(value)
+                return number if number > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        def _as_positive_int(value: Any) -> Optional[int]:
+            try:
+                number = int(value)
+                return number if number > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        def _resolve_tenure_months(info: Dict[str, Any]) -> Optional[int]:
+            tenure = _as_positive_int(info.get("existing_emi_tenure_months"))
+            if tenure is None:
+                tenure = _as_positive_int(info.get("existing_emi_time_period_months"))
+            return tenure
+
+        def _missing_fields(info: Dict[str, Any]) -> list:
+            missing = []
+            if _as_positive_float(info.get("total_existing_emis")) is None:
+                missing.append("Monthly EMI amount")
+            if _as_positive_float(info.get("existing_emi_loan_amount")) is None:
+                missing.append("Existing loan amount")
+            if _resolve_tenure_months(info) is None:
+                missing.append("Remaining tenure (months or years)")
+            return missing
+
+        missing = _missing_fields(financial_info)
+
+        if missing:
+            prompt_payload = {
+                "type": "existing_emi_details",
+                "stage": "awaiting_existing_emi_details",
+                "message": (
+                    "Please share your existing EMI loan details:\n"
+                    "1) Monthly EMI amount\n"
+                    "2) Existing loan amount\n"
+                    "3) Remaining tenure (months or years)"
+                ),
+            }
+
+            writer({"type": "status", "node": "existing_loan_details_collector", "msg": "⏸ Waiting for existing loan details"})
+            user_reply = interrupt(prompt_payload)
+            query_text = _extract_text(user_reply)
+
+            extracted_any = False
+
+            if query_text:
+                system_prompt = """
+                You are an information extraction assistant for home loan processing.
+                Extract from user response:
+                - monthly_emi (monthly existing EMI in rupees)
+                - loan_amount (existing loan amount in rupees)
+                - tenure_months (remaining tenure in months)
+
+                Rules:
+                - If user provides tenure in years, convert it to months.
+                - Return null for missing values.
+                """
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    ("user", "{query}"),
+                ])
+
+                llm = get_structured_model()
+                structured_llm = llm.with_structured_output(ExistingEmiDetails)
+                result = (prompt | structured_llm).invoke({"query": query_text})
+
+                extracted_monthly_emi = _as_positive_float(result.monthly_emi)
+                extracted_loan_amount = _as_positive_float(result.loan_amount)
+                extracted_tenure_months = _as_positive_int(result.tenure_months)
+
+                if extracted_monthly_emi is not None:
+                    financial_info["total_existing_emis"] = extracted_monthly_emi
+                    extracted_any = True
+                if extracted_loan_amount is not None:
+                    financial_info["existing_emi_loan_amount"] = extracted_loan_amount
+                    extracted_any = True
+                if extracted_tenure_months is not None:
+                    financial_info["existing_emi_tenure_months"] = extracted_tenure_months
+                    financial_info["existing_emi_time_period_months"] = extracted_tenure_months
+                    extracted_any = True
+
+            if not extracted_any:
+                retry_count += 1
+                attempts_left = max_retry_count - retry_count
+
+                if retry_count >= max_retry_count:
+                    fail_msg = (
+                        "❌ Unsuccessful process: maximum retry attempts reached.\n\n"
+                        "We could not capture complete existing loan details. "
+                        "Please start a new application."
+                    )
+                    writer({"type": "warning", "node": "existing_loan_details_collector", "msg": "❌ Maximum retries reached"})
+                    return {
+                        "messages": [AIMessage(content=fail_msg)],
+                        "paused_reason": "Maximum retries reached while collecting existing loan details.",
+                        "financial_info": financial_info,
+                        "existing_loan_details_collected": False,
+                        "current_stage": "failed_max_retries",
+                        "existing_loan_details_retry_count": retry_count,
+                    }
+
+                retry_msg = (
+                    "I couldn't extract valid existing loan details from your last response.\n"
+                    "Please provide at least one of these clearly: monthly EMI amount, existing loan amount, or remaining tenure.\n"
+                    f"Retry {retry_count}/{max_retry_count}. Attempts left: {attempts_left}."
+                )
+                return {
+                    "messages": [AIMessage(content=retry_msg)],
+                    "paused_reason": "Waiting for valid existing loan details input.",
+                    "financial_info": financial_info,
+                    "existing_loan_details_collected": False,
+                    "current_stage": "awaiting_existing_emi_details",
+                    "existing_loan_details_retry_count": retry_count,
+                }
+
+            missing = _missing_fields(financial_info)
+            if missing:
+                writer({"type": "status", "node": "existing_loan_details_collector", "msg": "⏳ Existing loan details incomplete"})
+                missing_msg = (
+                    "I still need the following existing loan details:\n"
+                    + "\n".join(f"  • {field}" for field in missing)
+                )
+                return {
+                    "messages": [AIMessage(content=missing_msg)],
+                    "paused_reason": f"Waiting for existing loan details: {', '.join(missing)}",
+                    "financial_info": financial_info,
+                    "existing_loan_details_collected": False,
+                    "current_stage": "awaiting_existing_emi_details",
+                    "existing_loan_details_retry_count": retry_count,
+                }
+
+        monthly_emi = _as_positive_float(financial_info.get("total_existing_emis")) or 0.0
+        existing_loan_amount = _as_positive_float(financial_info.get("existing_emi_loan_amount")) or 0.0
+        tenure_months = _resolve_tenure_months(financial_info) or 0
+
+        msg = (
+            "✅ Existing loan details captured successfully!\n\n"
+            f"  • Monthly Existing EMI: ₹{monthly_emi:,.2f}\n"
+            f"  • Existing Loan Amount: ₹{existing_loan_amount:,.2f}\n"
+            f"  • Remaining Tenure: {tenure_months} months\n\n"
+            "Proceeding to EMI calculation..."
+        )
+
+        writer({"type": "status", "node": "existing_loan_details_collector", "msg": "✅ Existing loan details captured"})
+
+        return {
+            "messages": [AIMessage(content=msg)],
+            "paused_reason": None,
+            "financial_info": financial_info,
+            "existing_emi_collected": True,
+            "existing_loan_details_collected": True,
+            "current_stage": "emi_calculation",
+            "existing_loan_details_retry_count": 0,
         }
     
     def financial_risk_checker(self, state: ApplicationState) -> Dict[str, Any]:
@@ -805,6 +1382,11 @@ class HomeLoanAgent:
         down_payment = as_float(financial_info.get("down_payment"), 0.0)
         income = as_float(financial_info.get("net_monthly_income"), 1.0)
         emis = as_float(financial_info.get("total_existing_emis"), 0.0)
+        
+        # Include the new EMI calculated in the previous step
+        emi_details = state.get("emi_details", {})
+        new_loan_emi = as_float(emi_details.get("monthly_emi"), 0.0)
+        total_monthly_obligations = emis + new_loan_emi
 
         if income <= 0:
             income = 1.0
@@ -821,7 +1403,7 @@ class HomeLoanAgent:
             property_value = 1.0
             
         ltv = (amount / property_value) * 100
-        foir = (emis / income) * 100
+        foir = (total_monthly_obligations / income) * 100
         
         # Build assessment message
         msg = f"--- Financial Risk Assessment ---\n"
@@ -953,14 +1535,14 @@ class HomeLoanAgent:
                         f"Interest ₹{entry['interest_paid']:>12,.2f} | "
                         f"Balance ₹{entry['closing_balance']:>14,.2f}\n")
         
-        msg += "\nProceeding to save application data..."
+        msg += "\nProceeding to financial risk check..."
         
         writer({"type": "status", "node": "emi_calculator", "msg": "✅ EMI calculation complete"})
 
         return {
             "emi_details": emi_details,
             "messages": [AIMessage(content=msg)],
-            "current_stage": "saving_data",
+            "current_stage": "financial_risk_check",
         }
 
     def save_application_json(self, state: ApplicationState) -> Dict[str, Any]:

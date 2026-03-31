@@ -264,6 +264,30 @@ class DocumentProcessingNodes:
         updated_financial_info = dict(state.get("financial_info", {}) or {})
         updated_financial_info.update(financial_info_updates)
 
+        extracted_details = []
+        for key, value in personal_info_updates.items():
+            if key == 'pan_number':
+                label = 'PAN Number'
+            elif key == 'dob':
+                label = 'DOB'
+            else:
+                label = key.replace('_', ' ').title()
+            extracted_details.append(f"• {label}: {value}")
+
+        for key, value in financial_info_updates.items():
+            if key == 'net_monthly_income':
+                label = 'Net Monthly Income'
+                if isinstance(value, (int, float)):
+                    extracted_details.append(f"• {label}: ₹{value:,.2f}")
+                    continue
+            else:
+                label = key.replace('_', ' ').title()
+            extracted_details.append(f"• {label}: {value}")
+
+        msg_content = f"Successfully processed {doc_type} document."
+        if extracted_details:
+            msg_content += "\n\nExtracted Info:\n" + "\n".join(extracted_details)
+
         return {
             "uploaded_documents": uploaded_docs,
             "personal_info": updated_personal_info,
@@ -272,7 +296,7 @@ class DocumentProcessingNodes:
             "uploaded_docs": None,
             "extracted_doc_payload": None,
             "document_processing_status": "processed",
-            "messages": [AIMessage(content=f"Successfully processed {doc_type} document.")],
+            "messages": [AIMessage(content=msg_content)],
         }
 
 

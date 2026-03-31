@@ -33,33 +33,89 @@ def route_intent(state: ApplicationState) -> str:
 def route_evaluation(state: ApplicationState) -> str:
     """
     Routes after state evaluation.
-    Routes to interrupt_handler if docs missing, loan_details if all docs present.
+    Routes to interrupt_handler if docs missing,
+    employment_status if docs are complete.
     """
-    if state.get("current_stage") == "failed_max_retries":
+    if str(state.get("current_stage") or "").startswith("failed"):
         return "failed"
 
     all_docs_uploaded = state.get("all_documents_uploaded", False)
     
     if all_docs_uploaded:
-        return "loan_details"
+        return "employment_status"
     else:
         return "interrupt_handler"
+
+
+def route_employment_status(state: ApplicationState) -> str:
+    """
+    Routes after employment status collection.
+    Loops until valid status is captured, fails for terminal failure,
+    proceeds to loan_details for eligible statuses.
+    """
+    if str(state.get("current_stage") or "").startswith("failed"):
+        return "failed"
+
+    if state.get("employment_status_collected", False):
+        return "loan_details"
+
+    return "employment_status"
 
 
 def route_loan_details(state: ApplicationState) -> str:
     """
     Routes after loan details check.
-    Routes back to loan_details if details missing, financial_risk if all present.
+    Routes back to loan_details if details missing, existing_emi if all present.
     """
-    if state.get("current_stage") == "failed_max_retries":
+    if str(state.get("current_stage") or "").startswith("failed"):
         return "failed"
 
     all_loan_details_provided = state.get("all_loan_details_provided", False)
 
     if all_loan_details_provided:
-        return "financial_risk"
+        return "existing_emi"
     else:
         return "loan_details"
+
+
+def route_existing_emi(state: ApplicationState) -> str:
+    """
+    Routes after existing EMI choice collection.
+    - If not yet collected -> loop existing_emi
+    - If user has no existing EMI -> financial_risk
+    - If user has existing EMI -> existing_loan_details
+    """
+    if str(state.get("current_stage") or "").startswith("failed"):
+        return "failed"
+
+    if not state.get("existing_emi_collected", False):
+        return "existing_emi"
+
+    financial_info = state.get("financial_info", {}) or {}
+    has_existing_emi = financial_info.get("has_existing_emi")
+
+    if has_existing_emi is False:
+        return "emi_calculator"
+
+    if has_existing_emi is True:
+        return "existing_loan_details"
+
+    return "existing_emi"
+
+
+def route_existing_loan_details(state: ApplicationState) -> str:
+    """
+    Routes after existing loan details collection.
+    - If not yet complete -> loop existing_loan_details
+    - If complete -> financial_risk
+    """
+    if str(state.get("current_stage") or "").startswith("failed"):
+        return "failed"
+
+    if state.get("existing_loan_details_collected", False):
+        return "emi_calculator"
+
+    return "existing_loan_details"
 
 
 def build_graph():
@@ -76,8 +132,11 @@ def build_graph():
     graph.add_node("document_processing", agent.document_processing)
     graph.add_node("text_info", agent.text_info_extractor)
     graph.add_node("state_evaluator", agent.state_evaluator)
+    graph.add_node("employment_status", agent.employment_status_collector)
     graph.add_node("interrupt_handler", agent.interrupt_handler)
     graph.add_node("loan_details", agent.loan_details_checker)
+    graph.add_node("existing_emi", agent.existing_emi_collector)
+    graph.add_node("existing_loan_details", agent.existing_loan_details_collector)
     graph.add_node("financial_risk", agent.financial_risk_checker)
     graph.add_node("emi_calculator", agent.emi_calculator)
     graph.add_node("save_json", agent.save_application_json)
@@ -108,6 +167,16 @@ def build_graph():
         route_evaluation,
         {
             "interrupt_handler": "interrupt_handler",
+            "employment_status": "employment_status",
+            "failed": END,
+        }
+    )
+
+    graph.add_conditional_edges(
+        "employment_status",
+        route_employment_status,
+        {
+            "employment_status": "employment_status",
             "loan_details": "loan_details",
             "failed": END,
         }
@@ -120,13 +189,34 @@ def build_graph():
         route_loan_details,
         {
             "loan_details": "loan_details",
-            "financial_risk": "financial_risk",
+            "existing_emi": "existing_emi",
+            "failed": END,
+        }
+    )
+
+    graph.add_conditional_edges(
+        "existing_emi",
+        route_existing_emi,
+        {
+            "existing_emi": "existing_emi",
+            "existing_loan_details": "existing_loan_details",
+            "emi_calculator": "emi_calculator",
+            "failed": END,
+        }
+    )
+
+    graph.add_conditional_edges(
+        "existing_loan_details",
+        route_existing_loan_details,
+        {
+            "existing_loan_details": "existing_loan_details",
+            "emi_calculator": "emi_calculator",
             "failed": END,
         }
     )
     
-    graph.add_edge("financial_risk", "emi_calculator")
-    graph.add_edge("emi_calculator", "save_json")
+    graph.add_edge("emi_calculator", "financial_risk")
+    graph.add_edge("financial_risk", "save_json")
     graph.add_edge("save_json", "save_db")
     graph.add_edge("save_db", "email_notification")
     graph.add_edge("email_notification", END)

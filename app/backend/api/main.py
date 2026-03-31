@@ -1,28 +1,17 @@
-"""
-FastAPI Main Application for Home Loan LangGraph System
-
-WebSocket-based real-time API that handles:
-- Session management for loan applications
-- Streaming responses with real-time yield messages
-- Interrupt handling for human-in-the-loop workflows
-- State management using LangGraph checkpoints
-"""
+import json
+import logging
+import uuid
+import hashlib
+from typing import Any, Dict, Iterable, Tuple
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Any, Dict, Iterable, Tuple
+from pydantic import BaseModel
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from starlette.websockets import WebSocketState
-import asyncio
-import hashlib
-import json
-import uuid
-from datetime import datetime
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-import logging
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.backend.graph import build_graph
-
 
 app = FastAPI()
 
@@ -35,6 +24,31 @@ app.add_middleware(
 )
 
 graph = build_graph()
+
+email_to_phone: Dict[str, str] = {}
+
+
+class SavePhoneRequest(BaseModel):
+    uid: str
+    email: str
+    phone_number: str
+
+
+@app.post("/save-phone")
+async def save_phone(req: SavePhoneRequest):
+    """Store a verified phone number mapped to a user's email."""
+    email_to_phone[req.email.lower()] = req.phone_number
+    logger.info("Phone saved: email=%s phone=%s uid=%s", req.email, req.phone_number, req.uid)
+    return {"status": "ok", "email": req.email, "phone_number": req.phone_number}
+
+
+@app.get("/get-phone")
+async def get_phone(email: str):
+    """Check if an email has a verified phone number."""
+    phone = email_to_phone.get(email.lower())
+    if phone:
+        return {"status": "ok", "phone_number": phone}
+    return {"status": "not_found", "phone_number": None}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,39 +104,65 @@ def _extract_bot_messages(diff: Dict[str, Any], node_name: str) -> list[Dict[str
 def _normalize_event_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = str(payload.get("user_id") or "").strip() or f"USR-{uuid.uuid4()}"
     payload_type = str(payload.get("type") or "").strip().lower()
+    email = str(payload.get("email") or "").strip()
+
+    personal_info = {}
+    if email:
+        personal_info["email"] = email
+        phone = email_to_phone.get(email.lower())
+        if phone:
+            personal_info["phone"] = phone
 
     if payload_type == "file_upload":
         data = payload.get("data")
         if not isinstance(data, dict):
             raise ValueError("file_upload payload requires 'data' as JSON object")
-        return {
+        result = {
             "user_id": user_id,
             "user_query": None,
             "uploaded_docs": data,
             "intent": None,
         }
+        if personal_info:
+            result["personal_info"] = personal_info
+        return result
 
     if payload_type == "text":
         message = str(payload.get("message") or "").strip()
         if not message:
             raise ValueError("text payload requires non-empty 'message'")
-        return {
+        result = {
             "user_id": user_id,
             "user_query": message,
             "uploaded_docs": None,
             "intent": None,
             "messages": [HumanMessage(content=message)],
         }
+        if personal_info:
+            result["personal_info"] = personal_info
+        return result
 
     raise ValueError("payload type must be either 'text' or 'file_upload'")
+
+
+def _get_pending_interrupt_payload(thread_id: str) -> Any:
+    """Return current pending interrupt payload for a thread, if any."""
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = graph.get_state(config)
+
+    tasks = getattr(snapshot, "tasks", None) or []
+    for task in tasks:
+        interrupts = getattr(task, "interrupts", None) or []
+        if interrupts:
+            return interrupts[0].value
+
+    return None
 
 
 async def run_graph(ws: WebSocket, graph_input: Any, thread_id: str) -> str:
     logger.info("[thread=%s] graph execution started", thread_id)
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Per-turn dedup: track message IDs already sent in THIS streaming turn
-    # so the same bot message is never forwarded twice.
     sent_msg_ids: set[str] = set()
 
     async for chunk in graph.astream(
@@ -145,25 +185,30 @@ async def run_graph(ws: WebSocket, graph_input: Any, thread_id: str) -> str:
                     continue
 
                 bot_messages = _extract_bot_messages(diff, node_name)
+                current_stage = diff.get("current_stage")
+                stage_value = current_stage if isinstance(current_stage, str) and current_stage.strip() else None
 
-                # Filter out messages already sent in this turn
                 new_messages = []
                 for item in bot_messages:
                     if item["id"] not in sent_msg_ids:
                         sent_msg_ids.add(item["id"])
                         new_messages.append(item)
 
-                if not new_messages:
+                if not new_messages and not stage_value:
                     continue
+
+                update_payload = {
+                    "node": node_name,
+                    "keys": list(diff.keys()),
+                    "messages": [item["text"] for item in new_messages],
+                    "bot_messages": new_messages,
+                }
+                if stage_value:
+                    update_payload["current_stage"] = stage_value
 
                 await ws.send_json({
                     "event": "updates",
-                    "data": {
-                        "node": node_name,
-                        "keys": list(diff.keys()),
-                        "messages": [item["text"] for item in new_messages],
-                        "bot_messages": new_messages,
-                    },
+                    "data": update_payload,
                 })
 
     snapshot = graph.get_state(config)
@@ -213,6 +258,26 @@ async def chat(ws: WebSocket) -> None:
             if "resume" in msg:
                 resume_payload = msg["resume"]
                 user_id = str(msg.get("user_id") or "").strip() or f"USR-{uuid.uuid4()}"
+
+                pending_interrupt = _get_pending_interrupt_payload(thread_id)
+                if pending_interrupt is None:
+                    logger.warning(
+                        "[conn=%s][thread=%s] stale resume ignored: no pending interrupt",
+                        connection_id,
+                        thread_id,
+                    )
+                    await ws.send_json({
+                        "event": "error",
+                        "data": {
+                            "message": (
+                                "This chat step is no longer active on the server (likely due to a backend reload). "
+                                "Please click 'Start New Application' to continue."
+                            )
+                        },
+                    })
+                    await ws.send_json({"event": "end", "data": {"result": "stale_resume"}})
+                    continue
+
                 if isinstance(resume_payload, dict):
                     resume_payload = {**resume_payload, "user_id": user_id}
                     normalized_resume = _normalize_event_payload(resume_payload)
